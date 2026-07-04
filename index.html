@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mon budget</title>
+
+<!-- PWA iOS -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Budget">
+<meta name="theme-color" content="#f6f5f1">
+<link rel="apple-touch-icon" id="apple-icon">
+<link rel="manifest" id="pwa-manifest">
+<style>
+  :root{
+    --bg:#f6f5f1; --card:#ffffff; --line:#e4e1d8; --line-strong:#cfcabb;
+    --ink:#23211c; --ink2:#6b6657; --ink3:#9a9483;
+    --green:#3b6d11; --green-bg:#eaf3de; --green-line:#97c459;
+    --red:#a32d2d; --red-bg:#fcebeb; --red-line:#f09595;
+    --amber:#854f0b; --amber-bg:#faeeda; --amber-line:#ef9f27;
+    --blue:#185fa5; --blue-bg:#e6f1fb; --blue-line:#85b7eb;
+    --radius:10px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:24px 16px 80px;}
+  .wrap{max-width:760px;margin:0 auto;}
+  h1{font-size:22px;font-weight:600;margin:0 0 4px;}
+  .sub{color:var(--ink2);font-size:14px;margin:0 0 24px;}
+  .monthbar{display:flex;align-items:center;gap:10px;margin-bottom:20px;}
+  .savebtn{
+    background:#3b6d11 !important;color:#fff !important;font-weight:600;
+    transition:background 0.2s,transform 0.1s;
+  }
+  .savebtn:hover{background:#2d5409 !important;}
+  .savebtn.saved{background:#185fa5 !important;}
+  .monthbar select,.monthbar button{
+    border:0.5px solid var(--line-strong);background:var(--card);border-radius:var(--radius);
+    padding:8px 12px;font-size:14px;color:var(--ink);cursor:pointer;
+  }
+  .monthbar button:hover{background:#f0efe9;}
+  .monthbar .addmonth{margin-left:auto;}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:24px;}
+  .metric{background:var(--card);border:0.5px solid var(--line);border-radius:12px;padding:14px 16px;}
+  .metric .lbl{font-size:12px;color:var(--ink2);margin-bottom:4px;}
+  .metric .val{font-size:20px;font-weight:600;}
+  .metric.pos .val{color:var(--green);}
+  .metric.neg .val{color:var(--red);}
+  section{background:var(--card);border:0.5px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px;}
+  section h2{font-size:15px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;justify-content:space-between;}
+  .rows{display:flex;flex-direction:column;gap:6px;}
+  .row{display:flex;align-items:center;gap:8px;}
+  .row input[type=text]{flex:1;border:0.5px solid var(--line);border-radius:8px;padding:7px 9px;font-size:13.5px;background:var(--bg);}
+  .row input[type=number]{width:100px;border:0.5px solid var(--line);border-radius:8px;padding:7px 9px;font-size:13.5px;text-align:right;background:var(--bg);}
+  .row select{border:0.5px solid var(--line);border-radius:8px;padding:7px 9px;font-size:13px;background:var(--bg);color:var(--ink2);}
+  .row .del{background:none;border:none;color:var(--ink3);cursor:pointer;font-size:16px;padding:2px 6px;line-height:1;}
+  .row .del:hover{color:var(--red);}
+  .addrow{margin-top:8px;background:none;border:0.5px dashed var(--line-strong);border-radius:8px;padding:7px 10px;font-size:13px;color:var(--ink2);cursor:pointer;width:100%;text-align:left;}
+  .addrow:hover{background:var(--bg);}
+  .total{display:flex;justify-content:space-between;border-top:0.5px solid var(--line);margin-top:10px;padding-top:10px;font-size:14px;font-weight:600;}
+  .pill{font-size:11px;padding:2px 8px;border-radius:20px;font-weight:600;}
+  .pill.green{background:var(--green-bg);color:var(--green);}
+  .pill.amber{background:var(--amber-bg);color:var(--amber);}
+  .pill.red{background:var(--red-bg);color:var(--red);}
+  .catbreak{display:flex;flex-direction:column;gap:6px;margin-top:12px;}
+  .catbar-row{font-size:12.5px;}
+  .catbar-row .top{display:flex;justify-content:space-between;margin-bottom:3px;color:var(--ink2);}
+  .catbar-track{height:6px;background:var(--bg);border-radius:4px;overflow:hidden;}
+  .catbar-fill{height:100%;background:var(--blue-line);}
+  .savings-note{font-size:12.5px;color:var(--ink2);margin-top:8px;}
+  .alert{display:flex;gap:8px;align-items:flex-start;background:var(--amber-bg);border:0.5px solid var(--amber-line);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--amber);margin-bottom:16px;}
+  .alert.ok{background:var(--green-bg);border-color:var(--green-line);color:var(--green);}
+  .alert.bad{background:var(--red-bg);border-color:var(--red-line);color:var(--red);}
+  .small{font-size:11.5px;color:var(--ink3);}
+  .reset{font-size:12px;color:var(--ink3);background:none;border:none;cursor:pointer;text-decoration:underline;}
+  .footer{text-align:center;margin-top:24px;}
+  .loading{text-align:center;color:var(--ink2);padding:60px 0;font-size:14px;}
+</style>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="loading">Chargement du budget…</div>
+</div>
+
+<script>
+const STORAGE_KEY = "budget-months";
+let months = {};
+let currentKey = null;
+let db = null;
+let auth = null;
+let currentUser = null;
+
+const firebaseConfig = {
+  apiKey: "AIzaSyA9cuO9GzC1pJfGhKRz7rBZtXqHFUhLU8o",
+  authDomain: "budget-92cee.firebaseapp.com",
+  projectId: "budget-92cee",
+  storageBucket: "budget-92cee.firebasestorage.app",
+  messagingSenderId: "518937293108",
+  appId: "1:518937293108:web:38012a527a65da64e4f561"
+};
+firebase.initializeApp(firebaseConfig);
+auth = firebase.auth();
+db = firebase.firestore();
+
+function showLoginScreen(){
+  document.getElementById('app').innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:90vh;gap:20px;padding:24px;text-align:center;">
+      <div style="width:72px;height:72px;background:#3b6d11;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:36px;color:#fff;">€</div>
+      <h1 style="margin:0;font-size:24px;">Mon Budget</h1>
+      <p style="color:#6b6657;margin:0;max-width:300px;">Connecte-toi pour synchroniser ton budget sur tous tes appareils.</p>
+      <button id="google-btn" style="background:#3b6d11;color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:15px;cursor:pointer;font-weight:600;width:100%;max-width:280px;">
+        Continuer avec Google
+      </button>
+      <p id="login-error" style="color:#a32d2d;font-size:13px;display:none;"></p>
+    </div>`;
+  document.getElementById('google-btn').onclick = function(){
+    const provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider).catch(function(e){
+      const el = document.getElementById('login-error');
+      if(el){ el.style.display='block'; el.textContent = 'Erreur : ' + e.message; }
+    });
+  };
+}
+
+auth.onAuthStateChanged(function(user){
+  if(user){
+    currentUser = user;
+    loadData();
+  } else {
+    currentUser = null;
+    showLoginScreen();
+  }
+});
+
+function emptyMonth(prevSoldeFin, prevMiseDeCote){
+  return {
+    soldeDebut: prevSoldeFin ?? 0,
+    revenus: [
+      {label:"Salaire", montant:0}
+    ],
+    fixes: [
+      {label:"Loyer", montant:0}
+    ],
+    epargne: [
+      {label:"Épargne", montant:0}
+    ],
+    cb: [], // {label, montant, categorie}
+    autresVariables: [
+      {label:"Espèces", montant:0}
+    ],
+    miseDeCotePrecedente: prevMiseDeCote ?? 0
+  };
+}
+
+function fmt(n){
+  if(isNaN(n)) n = 0;
+  return n.toLocaleString('fr-FR', {minimumFractionDigits:2, maximumFractionDigits:2}) + " €";
+}
+
+function sum(arr){ return arr.reduce((a,b)=>a+(parseFloat(b.montant)||0),0); }
+
+async function loadData(){
+  try{
+    const snap = await db.collection("budgets").doc(currentUser.uid).collection("data").doc("months").get();
+    if(snap.exists){
+      months = snap.data().months || {};
+    } else {
+      months = {};
+    }
+  }catch(e){
+    console.error("Erreur chargement", e);
+    months = {};
+  }
+  const keys = Object.keys(months).sort();
+  if(keys.length === 0){
+    const now = new Date();
+    const k = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+    months[k] = emptyMonth(0,0);
+    currentKey = k;
+  } else {
+    currentKey = keys[keys.length-1];
+  }
+  render();
+}
+
+async function save(){
+  if(!currentUser) return;
+  try{
+    await db.collection("budgets").doc(currentUser.uid).collection("data").doc("months").set({ months });
+  }catch(e){
+    console.error("Erreur sauvegarde", e);
+  }
+}
+
+function exportData(){
+  const blob = new Blob([JSON.stringify(months, null, 2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "budget-sauvegarde-" + new Date().toISOString().slice(0,10) + ".json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importData(input){
+  const file = input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try{
+      const data = JSON.parse(e.target.result);
+      months = data;
+      const keys = Object.keys(months).sort();
+      currentKey = keys[keys.length-1];
+      save();
+      render();
+    }catch(err){
+      alert("Fichier invalide. Vérifie que c'est bien un export de cette appli.");
+    }
+  };
+  reader.readAsText(file);
+  input.value = "";
+}
+
+function monthLabel(key){
+  const [y,m] = key.split("-");
+  const noms = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
+  return noms[parseInt(m,10)-1] + " " + y;
+}
+
+function addNewMonth(){
+  const keys = Object.keys(months).sort();
+  const last = keys[keys.length-1];
+  const [y,m] = last.split("-").map(Number);
+  let ny = y, nm = m+1;
+  if(nm > 12){ nm = 1; ny += 1; }
+  const nk = ny + "-" + String(nm).padStart(2,"0");
+  if(months[nk]) { currentKey = nk; render(); return; }
+  const lastData = months[last];
+  const lastTotals = computeTotals(lastData);
+  months[nk] = emptyMonth(lastTotals.soldeFin, lastTotals.miseDeCoteTotal);
+  currentKey = nk;
+  save();
+  render();
+}
+
+function computeTotals(d){
+  const soldeDebut = parseFloat(d.soldeDebut) || 0;
+  const totalRevenusBrut = sum(d.revenus);
+  const totalFixes = sum(d.fixes);
+  const totalEpargne = sum(d.epargne);
+  const totalCB = sum(d.cb);
+  const totalAutresVar = sum(d.autresVariables);
+  const totalVariable = totalCB + totalAutresVar;
+  const resteApresFixe = totalRevenusBrut + soldeDebut - totalFixes - totalEpargne;
+  const soldeFin = resteApresFixe - totalVariable;
+  const miseDeCoteTotal = (parseFloat(d.miseDeCotePrecedente)||0) + totalEpargne;
+  return {totalRevenusBrut, totalFixes, totalEpargne, totalCB, totalAutresVar, totalVariable, resteApresFixe, soldeFin, miseDeCoteTotal};
+}
+
+function catBreakdown(cb){
+  const map = {};
+  cb.forEach(item=>{
+    const cat = item.categorie || "Non catégorisé";
+    map[cat] = (map[cat]||0) + (parseFloat(item.montant)||0);
+  });
+  return Object.entries(map).sort((a,b)=>b[1]-a[1]);
+}
+
+const CATEGORIES = ["Alimentation","Sorties / loisirs","Shopping","Transport","Santé","Maison","Abonnements","Autre"];
+
+const LABEL_COLORS = ["#534AB7","#0F6E56","#993C1D","#993556","#185FA5","#3B6D11","#854F0B","#A32D2D","#26215C","#04342C"];
+function colorForLabel(label){
+  const text = (label || "").trim().toLowerCase() || "_";
+  let hash = 0;
+  for(let i=0;i<text.length;i++){ hash = (hash * 31 + text.charCodeAt(i)) >>> 0; }
+  return LABEL_COLORS[hash % LABEL_COLORS.length];
+}
+
+function rowHTML(section, idx, item, withCat){
+  const catSelect = withCat ? `
+    <select onchange="updateField('${section}',${idx},'categorie',this.value)">
+      <option value="">Catégorie…</option>
+      ${CATEGORIES.map(c=>`<option value="${c}" ${item.categorie===c?'selected':''}>${c}</option>`).join('')}
+    </select>` : '';
+  const dotColor = colorForLabel(item.label);
+  return `
+    <div class="row">
+      <span style="width:9px;height:9px;border-radius:50%;background:${dotColor};flex-shrink:0;" aria-hidden="true"></span>
+      <input type="text" value="${item.label||''}" placeholder="Libellé" oninput="updateField('${section}',${idx},'label',this.value)" onblur="render()">
+      ${catSelect}
+      <input type="number" step="0.01" value="${item.montant||0}" oninput="updateField('${section}',${idx},'montant',this.value)" onblur="render()">
+      <button class="del" onclick="deleteRow('${section}',${idx})" aria-label="Supprimer">×</button>
+    </div>`;
+}
+
+function render(){
+  const app = document.getElementById('app');
+  const d = months[currentKey];
+  const t = computeTotals(d);
+  const keys = Object.keys(months).sort();
+
+  const cbCats = catBreakdown(d.cb);
+  const maxCat = cbCats.length ? cbCats[0][1] : 1;
+
+  let alertHTML = '';
+  if(t.soldeFin < 0){
+    alertHTML = `<div class="alert bad"><span>⚠</span><div>Ce mois finit en négatif (${fmt(t.soldeFin)}). Pense à réduire les dépenses variables ou à puiser dans l'épargne avec prudence.</div></div>`;
+  } else if((parseFloat(d.soldeDebut)||0) < 0){
+    alertHTML = `<div class="alert">⚠ <div>Tu démarres le mois avec un solde négatif (${fmt(parseFloat(d.soldeDebut)||0)}). Vise un petit matelas de sécurité pour ne plus repartir dans le rouge.</div></div>`;
+  } else {
+    alertHTML = `<div class="alert ok">✓ <div>Le mois se termine avec un solde positif de ${fmt(t.soldeFin)}.</div></div>`;
+  }
+
+  app.innerHTML = `
+    <h1>Mon budget</h1>
+    <p class="sub">Suivi mensuel des revenus, charges fixes et dépenses variables.</p>
+
+    <div class="monthbar">
+      <select onchange="changeMonth(this.value)">
+        ${keys.map(k=>`<option value="${k}" ${k===currentKey?'selected':''}>${monthLabel(k)}</option>`).join('')}
+      </select>
+      <button class="addmonth" onclick="addNewMonth()">+ Mois suivant</button>
+      <button class="savebtn" id="save-btn" onclick="manualSave()">💾 Sauvegarder</button>
+    </div>
+
+    ${alertHTML}
+
+    <div class="cards">
+      <div class="metric"><div class="lbl">Solde début de mois</div><div class="val">${fmt(parseFloat(d.soldeDebut)||0)}</div></div>
+      <div class="metric"><div class="lbl">Total recettes</div><div class="val">${fmt(t.totalRevenusBrut)}</div></div>
+      <div class="metric"><div class="lbl">Reste à dépenser</div><div class="val">${fmt(t.resteApresFixe)}</div></div>
+      <div class="metric ${t.soldeFin>=0?'pos':'neg'}"><div class="lbl">Solde fin de mois</div><div class="val">${fmt(t.soldeFin)}</div></div>
+    </div>
+
+    <section>
+      <h2>Recettes <span class="pill green">${fmt(t.totalRevenusBrut)}</span></h2>
+      <div class="row">
+        <input type="text" disabled value="Solde de début de mois" style="color:var(--ink2)">
+        <input type="number" step="0.01" value="${d.soldeDebut}" oninput="updateSoldeDebut(this.value)" onblur="render()">
+        <span style="width:24px"></span>
+      </div>
+      <div class="rows" id="rev-rows">
+        ${d.revenus.map((it,i)=>rowHTML('revenus',i,it,false)).join('')}
+      </div>
+      <button class="addrow" onclick="addRow('revenus')">+ Ajouter une recette</button>
+    </section>
+
+    <section>
+      <h2>Charges fixes <span class="pill amber">${fmt(t.totalFixes)}</span></h2>
+      <div class="rows">
+        ${d.fixes.map((it,i)=>rowHTML('fixes',i,it,false)).join('')}
+      </div>
+      <button class="addrow" onclick="addRow('fixes')">+ Ajouter une charge fixe</button>
+    </section>
+
+    <section>
+      <h2>Épargne <span class="pill green">${fmt(t.totalEpargne)}</span></h2>
+      <div class="rows">
+        ${d.epargne.map((it,i)=>rowHTML('epargne',i,it,false)).join('')}
+      </div>
+      <button class="addrow" onclick="addRow('epargne')">+ Ajouter une ligne d'épargne</button>
+      <p class="savings-note">Solde d'épargne cumulé : <strong>${fmt(t.miseDeCoteTotal)}</strong></p>
+      <div class="row" style="margin-top:6px;">
+        <input type="text" disabled value="Solde d'épargne en début de mois" style="color:var(--ink2)">
+        <input type="number" step="0.01" value="${d.miseDeCotePrecedente}" oninput="updateMiseDeCote(this.value)" onblur="render()">
+        <span style="width:24px"></span>
+      </div>
+      <p class="small">Modifie cette valeur si ton solde réel sur ton livret diffère du calcul automatique.</p>
+    </section>
+
+    <section>
+      <h2>Dépenses CB <span class="pill red">${fmt(t.totalCB)}</span></h2>
+      <div class="rows">
+        ${d.cb.map((it,i)=>rowHTML('cb',i,it,true)).join('')}
+      </div>
+      <button class="addrow" onclick="addRow('cb')">+ Ajouter une dépense CB</button>
+      ${cbCats.length ? `
+      <div class="catbreak">
+        ${cbCats.map(([cat,val])=>`
+          <div class="catbar-row">
+            <div class="top"><span>${cat}</span><span>${fmt(val)}</span></div>
+            <div class="catbar-track"><div class="catbar-fill" style="width:${Math.round(val/maxCat*100)}%"></div></div>
+          </div>
+        `).join('')}
+      </div>` : `<p class="small">Catégorise chaque dépense pour voir où part ton argent.</p>`}
+    </section>
+
+    <section>
+      <h2>Autres dépenses variables <span class="pill red">${fmt(t.totalAutresVar)}</span></h2>
+      <div class="rows">
+        ${d.autresVariables.map((it,i)=>rowHTML('autresVariables',i,it,false)).join('')}
+      </div>
+      <button class="addrow" onclick="addRow('autresVariables')">+ Ajouter une dépense</button>
+      <div class="total"><span>Total dépenses du mois</span><span>${fmt(t.totalVariable + t.totalFixes)}</span></div>
+    </section>
+
+    <div class="footer">
+      <button class="reset" onclick="exportData()">Exporter une sauvegarde</button>
+      &nbsp;·&nbsp;
+      <label class="reset" style="cursor:pointer;">
+        Importer une sauvegarde
+        <input type="file" accept=".json" onchange="importData(this)" style="display:none;">
+      </label>
+      &nbsp;·&nbsp;
+      <button class="reset" onclick="resetMonth()">Réinitialiser ce mois</button>
+      &nbsp;·&nbsp;
+      <button class="reset" onclick="auth.signOut()">Se déconnecter</button>
+      <p class="small" style="margin-top:10px;">Données synchronisées sur tous tes appareils. Connecté : <strong>${currentUser ? currentUser.email : ''}</strong></p>
+    </div>
+  `;
+}
+
+function changeMonth(k){ currentKey = k; render(); }
+
+async function manualSave(){
+  const btn = document.getElementById('save-btn');
+  if(btn){ btn.textContent = '⏳ Sauvegarde...'; btn.disabled = true; }
+  await save();
+  if(btn){
+    btn.textContent = '✓ Sauvegardé !';
+    btn.classList.add('saved');
+    setTimeout(()=>{
+      btn.textContent = '💾 Sauvegarder';
+      btn.classList.remove('saved');
+      btn.disabled = false;
+    }, 2000);
+  }
+}
+
+function updateSoldeDebut(v){
+  months[currentKey].soldeDebut = v;
+  save();
+}
+
+function updateMiseDeCote(v){
+  months[currentKey].miseDeCotePrecedente = v;
+  save();
+}
+
+function updateField(section, idx, field, value){
+  const arr = months[currentKey][section];
+  if(!arr[idx]) return;
+  arr[idx][field] = value;
+  save();
+}
+
+function renderTotalsOnly(){
+  // simplest reliable approach: full re-render but preserve scroll
+  const scrollY = window.scrollY;
+  render();
+  window.scrollTo(0, scrollY);
+}
+
+function addRow(section){
+  months[currentKey][section].push({label:"", montant:0, ...(section==='cb'?{categorie:""}:{})});
+  save(); render();
+}
+
+function deleteRow(section, idx){
+  months[currentKey][section].splice(idx,1);
+  save(); render();
+}
+
+function resetMonth(){
+  if(!confirm("Réinitialiser toutes les données de ce mois ?")) return;
+  months[currentKey] = emptyMonth(0,0);
+  save(); render();
+}
+
+// démarrage géré par onAuthStateChanged
+</script>
+
+<script>
+// ── Génère l'icône app en canvas ──────────────────────────────
+(function(){
+  const c = document.createElement('canvas');
+  c.width = c.height = 512;
+  const ctx = c.getContext('2d');
+  // fond arrondi
+  const r = 110;
+  ctx.beginPath();
+  ctx.moveTo(r,0); ctx.lineTo(512-r,0);
+  ctx.quadraticCurveTo(512,0,512,r);
+  ctx.lineTo(512,512-r); ctx.quadraticCurveTo(512,512,512-r,512);
+  ctx.lineTo(r,512); ctx.quadraticCurveTo(0,512,0,512-r);
+  ctx.lineTo(0,r); ctx.quadraticCurveTo(0,0,r,0);
+  ctx.closePath();
+  ctx.fillStyle = '#3b6d11';
+  ctx.fill();
+  // symbole €
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 280px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('€', 256, 272);
+  const iconUrl = c.toDataURL('image/png');
+  document.getElementById('apple-icon').href = iconUrl;
+
+  // ── Manifeste PWA ─────────────────────────────────────────────
+  const manifest = {
+    name: 'Mon Budget',
+    short_name: 'Budget',
+    start_url: './',
+    display: 'standalone',
+    background_color: '#f6f5f1',
+    theme_color: '#f6f5f1',
+    lang: 'fr',
+    icons: [
+      { src: iconUrl, sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
+    ]
+  };
+  const mBlob = new Blob([JSON.stringify(manifest)], {type:'application/json'});
+  document.getElementById('pwa-manifest').href = URL.createObjectURL(mBlob);
+
+  // ── Service Worker (cache offline) ───────────────────────────
+  if('serviceWorker' in navigator){
+    const swCode = `
+const CACHE = 'budget-v1';
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll([self.location.href])));
+  self.skipWaiting();
+});
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));
+  self.clients.claim();
+});
+self.addEventListener('fetch', e => {
+  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).then(res => {
+    const clone = res.clone();
+    caches.open(CACHE).then(c => c.put(e.request, clone));
+    return res;
+  })));
+});
+`;
+    const swBlob = new Blob([swCode], {type:'application/javascript'});
+    navigator.serviceWorker.register(URL.createObjectURL(swBlob))
+      .then(()=>console.log('SW enregistré'))
+      .catch(e=>console.warn('SW non supporté:', e));
+  }
+})();
+</script>
+</body>
+</html>
