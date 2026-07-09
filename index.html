@@ -191,10 +191,29 @@ async function loadData(){
 
 async function save(){
   if(!currentUser) return;
+  showSaveStatus('saving');
   try{
     await db.collection("budgets").doc(currentUser.uid).collection("data").doc("months").set({ months });
+    showSaveStatus('saved');
   }catch(e){
     console.error("Erreur sauvegarde", e);
+    showSaveStatus('error');
+  }
+}
+
+function showSaveStatus(state){
+  const el = document.getElementById('save-status');
+  if(!el) return;
+  if(state === 'saving'){
+    el.textContent = '⏳ Sauvegarde...';
+    el.style.color = 'var(--ink3)';
+  } else if(state === 'saved'){
+    el.textContent = '✓ Sauvegardé';
+    el.style.color = 'var(--green)';
+    setTimeout(()=>{ el.textContent = ''; }, 3000);
+  } else if(state === 'error'){
+    el.textContent = '✗ Erreur de sauvegarde';
+    el.style.color = 'var(--red)';
   }
 }
 
@@ -327,7 +346,7 @@ function render(){
         ${keys.map(k=>`<option value="${k}" ${k===currentKey?'selected':''}>${monthLabel(k)}</option>`).join('')}
       </select>
       <button class="addmonth" onclick="addNewMonth()">+ Mois suivant</button>
-      <button class="savebtn" id="save-btn" onclick="manualSave()">💾 Sauvegarder</button>
+      <span id="save-status" style="font-size:12px;margin-left:4px;transition:color 0.3s;"></span>
     </div>
 
     ${alertHTML}
@@ -421,16 +440,10 @@ function changeMonth(k){ currentKey = k; render(); }
 
 async function manualSave(){
   const btn = document.getElementById('save-btn');
-  if(btn){ btn.textContent = '⏳ Sauvegarde...'; btn.disabled = true; }
+  if(btn){ btn.disabled = true; }
   await save();
   if(btn){
-    btn.textContent = '✓ Sauvegardé !';
-    btn.classList.add('saved');
-    setTimeout(()=>{
-      btn.textContent = '💾 Sauvegarder';
-      btn.classList.remove('saved');
-      btn.disabled = false;
-    }, 2000);
+    setTimeout(()=>{ btn.disabled = false; }, 2000);
   }
 }
 
