@@ -158,6 +158,29 @@ function emptyMonth(solde, epargne){
   };
 }
 
+// Calcule la valeur actuelle d'un actif = valeur initiale + épargne cumulée depuis le budget
+function computeAssetValue(asset){
+  const initial = parseFloat(asset.initialValue)||0;
+  if(!asset.linkedLabel) return { current: initial, added: 0 };
+  // Somme tous les montants de la ligne épargne dont le label correspond
+  let added = 0;
+  Object.values(months).forEach(m => {
+    m.epargne.forEach(line => {
+      if((line.label||'').trim().toLowerCase() === (asset.linkedLabel||'').trim().toLowerCase()){
+        added += parseFloat(line.montant)||0;
+      }
+    });
+  });
+  return { current: initial + added, added };
+}
+
+function totalPatrimoineActuel(){
+  return assets.reduce((s,a)=>{
+    const v = a.linkedLabel ? computeAssetValue(a).current : (parseFloat(a.value)||0);
+    return s + v;
+  }, 0);
+}
+
 function computeTotals(d){
   const soldeDebut = parseFloat(d.soldeDebut)||0;
   const totalRevenusBrut = sum(d.revenus);
@@ -469,17 +492,27 @@ function renderGraphs(nav){
 // ── ONGLET ÉPARGNE ────────────────────────────────────────────
 function renderEpargne(nav){
   const keys=Object.keys(months).sort();
-  const totalPatrimoine=assets.reduce((s,a)=>s+(parseFloat(a.value)||0),0);
-  const totalPerf=assets.reduce((s,a)=>s+(parseFloat(a.perf)||0),0);
-  const perfPct=totalPatrimoine>0?((totalPerf/(totalPatrimoine-totalPerf))*100):0;
+
+  // Calcul des valeurs actuelles des actifs
+  const assetsWithValues = assets.map(a => {
+    if(a.linkedLabel){
+      const {current, added} = computeAssetValue(a);
+      return {...a, currentValue: current, addedFromBudget: added};
+    }
+    return {...a, currentValue: parseFloat(a.value)||0, addedFromBudget: 0};
+  });
+
+  const totalPatrimoine = assetsWithValues.reduce((s,a)=>s+a.currentValue,0);
+  const totalPerf = assets.reduce((s,a)=>s+(parseFloat(a.perf)||0),0);
+  const perfPct = (totalPatrimoine - totalPerf) > 0 ? (totalPerf/(totalPatrimoine-totalPerf)*100) : 0;
 
   // Regrouper par type
   const byType={};
-  assets.forEach(a=>{ const t=a.type||"Autre"; byType[t]=(byType[t]||0)+(parseFloat(a.value)||0); });
+  assetsWithValues.forEach(a=>{ const t=a.type||"Autre"; byType[t]=(byType[t]||0)+a.currentValue; });
   const typeEntries=Object.entries(byType).sort((a,b)=>b[1]-a[1]);
 
-  // Historique épargne (depuis budget)
-  const history=keys.map(k=>{ const mt=computeTotals(months[k]); return {label:monthLabel(k),ajout:sum(months[k].epargne)}; });
+  // Historique épargne mensuelle
+  const history=keys.map(k=>({ label:monthLabel(k), ajout:sum(months[k].epargne) }));
   const last3=keys.slice(-3).map(k=>sum(months[k].epargne));
   const avg=last3.length?last3.reduce((a,b)=>a+b,0)/last3.length:0;
 
@@ -488,38 +521,44 @@ function renderEpargne(nav){
   const remaining=savingsGoal>0?Math.max(0,savingsGoal-totalPatrimoine):0;
   const moisR=avg>0&&remaining>0?Math.ceil(remaining/avg):null;
 
+  // Labels épargne disponibles dans le budget (pour le lien)
+  const epargneLabels=[...new Set(Object.values(months).flatMap(m=>m.epargne.map(e=>e.label).filter(Boolean)))];
+
   document.getElementById('app').innerHTML=`
     <div class="wrap" style="padding-bottom:80px;">
+
       <!-- HEADER PATRIMOINE -->
       <div style="background:#1a1a2e;border-radius:16px;padding:20px;margin-bottom:16px;color:#fff;">
         <div style="font-size:12px;opacity:0.6;margin-bottom:4px;">Patrimoine brut</div>
         <div style="font-size:32px;font-weight:700;margin-bottom:4px;">${totalPatrimoine.toLocaleString('fr-FR')} €</div>
         <div style="font-size:13px;${totalPerf>=0?'color:#97c459':'color:#f09595'}">
-          ${totalPerf>=0?'+':''}${fmt(totalPerf)} &nbsp; ${totalPerf>=0?'+':''}${Math.abs(perfPct).toFixed(2)}%
-          <span style="opacity:0.5;color:#fff;margin-left:6px;">Performance totale</span>
+          ${totalPerf>=0?'+':''}${fmt(totalPerf)} &nbsp;
+          <span style="opacity:0.55;color:#fff;">${totalPerf>=0?'+':''}${Math.abs(perfPct).toFixed(2)}% performance</span>
         </div>
       </div>
 
-      <!-- STATS RAPIDES -->
+      <!-- STATS -->
       <div class="stat-grid" style="margin-bottom:16px;">
         <div class="stat-box"><div class="lbl">Actifs</div><div class="val">${assets.length}</div></div>
         <div class="stat-box"><div class="lbl">Épargne / mois (moy.)</div><div class="val">${fmt(avg)}</div></div>
       </div>
 
       <!-- RÉPARTITION -->
-      ${assets.length>0?`
+      ${assetsWithValues.length>0?`
       <div class="chart-section">
         <h2>Répartition du patrimoine</h2>
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
           <div style="flex-shrink:0;width:160px;height:160px;"><canvas id="c-donut"></canvas></div>
-          <div style="flex:1;display:flex;flex-direction:column;gap:8px;">
+          <div style="flex:1;min-width:160px;display:flex;flex-direction:column;gap:8px;">
             ${typeEntries.map(([type,val])=>{
               const color=ASSET_COLORS[type]||'#9a9483';
               const pctT=totalPatrimoine>0?Math.round(val/totalPatrimoine*100):0;
               return `<div>
                 <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px;">
-                  <span style="display:flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;"></span>${type}</span>
-                  <span style="font-weight:600;">${pctT}%</span>
+                  <span style="display:flex;align-items:center;gap:6px;">
+                    <span style="width:10px;height:10px;border-radius:50%;background:${color};display:inline-block;"></span>${type}
+                  </span>
+                  <span style="font-weight:600;">${pctT}% · ${fmt(val)}</span>
                 </div>
                 <div style="height:5px;background:var(--line);border-radius:3px;overflow:hidden;">
                   <div style="height:100%;background:${color};width:${pctT}%;"></div>
@@ -536,7 +575,7 @@ function renderEpargne(nav){
         ${savingsGoal>0?`
           <div style="display:flex;justify-content:space-between;font-size:13px;"><span>${fmt(totalPatrimoine)}</span><span>${fmt(savingsGoal)}</span></div>
           <div class="goal-bar"><div class="goal-fill" style="width:${pct}%"></div></div>
-          <div style="font-size:13px;color:var(--ink2);">${pct}% atteint${moisR?' · encore ~'+moisR+' mois avec la moyenne actuelle':' · objectif atteint 🎉'}</div>
+          <div style="font-size:13px;color:var(--ink2);">${pct}% atteint${moisR?' · encore ~'+moisR+' mois':' · objectif atteint 🎉'}</div>
         `:'<p style="font-size:13px;color:var(--ink2);margin:0 0 4px;">Définis un objectif pour suivre ta progression.</p>'}
         <div class="goal-row">
           <input type="number" step="100" placeholder="Objectif en €" value="${savingsGoal||''}" id="goal-input">
@@ -546,38 +585,67 @@ function renderEpargne(nav){
 
       <!-- LISTE ACTIFS -->
       <section>
-        <h2>Mes actifs <span class="pill green">${assets.length}</span></h2>
-        ${assets.length===0?'<p class="small">Ajoute tes placements pour suivre ton patrimoine.</p>':''}
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          ${assets.map(a=>{
+        <h2>Mes actifs</h2>
+        ${assetsWithValues.length===0?'<p class="small" style="margin-bottom:12px;">Ajoute tes placements. Tu peux les lier à une ligne épargne du budget pour qu'ils se mettent à jour automatiquement.</p>':''}
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          ${assetsWithValues.map(a=>{
             const color=ASSET_COLORS[a.type]||'#9a9483';
-            const pctA=totalPatrimoine>0?Math.round((parseFloat(a.value)||0)/totalPatrimoine*100):0;
+            const pctA=totalPatrimoine>0?Math.round(a.currentValue/totalPatrimoine*100):0;
             const perf=parseFloat(a.perf)||0;
-            return `<div style="background:var(--bg);border-radius:10px;padding:12px 14px;">
-              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                <div style="width:36px;height:36px;border-radius:10px;background:${color}22;display:flex;align-items:center;justify-content:center;font-size:16px;color:${color};font-weight:700;flex-shrink:0;">${(a.label||'?')[0].toUpperCase()}</div>
+            const isLinked=!!a.linkedLabel;
+            return `<div style="background:var(--bg);border-radius:12px;padding:14px;">
+              <!-- Ligne 1 : avatar + nom + type + supprimer -->
+              <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
+                <div style="width:36px;height:36px;border-radius:10px;background:${color}22;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:${color};flex-shrink:0;">${(a.label||'?')[0].toUpperCase()}</div>
                 <div style="flex:1;">
-                  <input type="text" value="${(a.label||'').replace(/"/g,'&quot;')}" placeholder="Nom du placement" oninput="updateAsset(${a.id},'label',this.value)" style="width:100%;border:none;background:transparent;font-size:14px;font-weight:600;color:var(--ink);padding:0;" onblur="saveSettings()">
-                  <select onchange="updateAsset(${a.id},'type',this.value); saveSettings(); render();" style="border:none;background:transparent;font-size:12px;color:var(--ink2);padding:0;cursor:pointer;">
+                  <input type="text" value="${(a.label||'').replace(/"/g,'&quot;')}" placeholder="Nom du placement"
+                    oninput="updateAsset(${a.id},'label',this.value)"
+                    style="width:100%;border:none;background:transparent;font-size:14px;font-weight:600;color:var(--ink);padding:0;" onblur="saveSettings()">
+                  <select onchange="updateAsset(${a.id},'type',this.value);saveSettings();render();"
+                    style="border:none;background:transparent;font-size:12px;color:var(--ink2);padding:0;cursor:pointer;">
                     ${ASSET_TYPES.map(t=>`<option value="${t}" ${a.type===t?'selected':''}>${t}</option>`).join('')}
                   </select>
                 </div>
                 <button onclick="deleteAsset(${a.id})" style="background:none;border:none;color:var(--ink3);cursor:pointer;font-size:18px;padding:2px 6px;">×</button>
               </div>
-              <div style="display:flex;gap:8px;align-items:center;">
-                <div style="flex:1;">
-                  <div style="font-size:11px;color:var(--ink2);margin-bottom:2px;">Valeur actuelle</div>
-                  <div style="display:flex;align-items:center;gap:4px;">
-                    <input type="number" step="0.01" value="${a.value||0}" oninput="updateAsset(${a.id},'value',this.value)" onblur="saveSettings();render();" style="width:110px;border:0.5px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13px;font-weight:600;background:#fff;">
-                    <span style="font-size:11px;color:var(--ink3);">€ · ${pctA}%</span>
-                  </div>
+
+              <!-- Ligne 2 : valeur initiale + lien budget -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                <div>
+                  <div style="font-size:11px;color:var(--ink2);margin-bottom:3px;">Solde initial (€)</div>
+                  <input type="number" step="0.01" value="${parseFloat(a.initialValue)||0}"
+                    oninput="updateAsset(${a.id},'initialValue',this.value)"
+                    onblur="saveSettings();render();"
+                    style="width:100%;border:0.5px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px;background:#fff;">
                 </div>
                 <div>
-                  <div style="font-size:11px;color:var(--ink2);margin-bottom:2px;">+/- value</div>
-                  <div style="display:flex;align-items:center;gap:4px;">
-                    <input type="number" step="0.01" value="${a.perf||0}" oninput="updateAsset(${a.id},'perf',this.value)" onblur="saveSettings();render();" style="width:90px;border:0.5px solid var(--line);border-radius:6px;padding:5px 8px;font-size:13px;font-weight:600;background:#fff;color:${perf>=0?'var(--green)':'var(--red)'}">
-                    <span style="font-size:11px;${perf>=0?'color:var(--green)':'color:var(--red)'}">€</span>
-                  </div>
+                  <div style="font-size:11px;color:var(--ink2);margin-bottom:3px;">Lier à ligne épargne</div>
+                  <select onchange="updateAsset(${a.id},'linkedLabel',this.value);saveSettings();render();"
+                    style="width:100%;border:0.5px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px;background:#fff;color:var(--ink);">
+                    <option value="">— Manuel —</option>
+                    ${epargneLabels.map(l=>`<option value="${l}" ${a.linkedLabel===l?'selected':''}>${l}</option>`).join('')}
+                  </select>
+                </div>
+              </div>
+
+              <!-- Ligne 3 : valeur actuelle + perf -->
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div style="background:${color}11;border-radius:8px;padding:8px 10px;">
+                  <div style="font-size:11px;color:var(--ink2);">${isLinked?'Valeur auto (initial + épargne)':'Valeur actuelle'}</div>
+                  <div style="font-size:16px;font-weight:700;color:${color};">${fmt(a.currentValue)}</div>
+                  ${isLinked?`<div style="font-size:11px;color:var(--green);">+${fmt(a.addedFromBudget)} depuis budget</div>`:''}
+                  ${!isLinked?`<input type="number" step="0.01" value="${parseFloat(a.value)||0}"
+                    oninput="updateAsset(${a.id},'value',this.value)" onblur="saveSettings();render();"
+                    style="width:100%;border:0.5px solid var(--line);border-radius:6px;padding:5px 8px;font-size:12px;background:#fff;margin-top:4px;" placeholder="Valeur manuelle">`:
+                  `<div style="font-size:10px;color:var(--ink3);margin-top:2px;">Mis à jour automatiquement ✓</div>`}
+                  <div style="font-size:11px;color:var(--ink3);margin-top:2px;">${pctA}% du patrimoine</div>
+                </div>
+                <div style="background:${perf>=0?'var(--green-bg)':'var(--red-bg)'};border-radius:8px;padding:8px 10px;">
+                  <div style="font-size:11px;color:var(--ink2);">+/- value</div>
+                  <div style="font-size:16px;font-weight:700;color:${perf>=0?'var(--green)':'var(--red)'};">${perf>=0?'+':''}${fmt(perf)}</div>
+                  <input type="number" step="0.01" value="${a.perf||0}"
+                    oninput="updateAsset(${a.id},'perf',this.value)" onblur="saveSettings();render();"
+                    style="width:100%;border:0.5px solid ${perf>=0?'var(--green-line)':'var(--red-line)'};border-radius:6px;padding:5px 8px;font-size:12px;background:#fff;margin-top:4px;">
                 </div>
               </div>
             </div>`;
@@ -592,15 +660,17 @@ function renderEpargne(nav){
     ${nav}`;
 
   // Donut
-  if(assets.length>0){
-    charts['donut']=new Chart(document.getElementById('c-donut'),{type:'doughnut',data:{
+  if(assetsWithValues.length>0){
+    const ctx=document.getElementById('c-donut');
+    if(ctx) charts['donut']=new Chart(ctx,{type:'doughnut',data:{
       labels:typeEntries.map(([t])=>t),
       datasets:[{data:typeEntries.map(([,v])=>v),backgroundColor:typeEntries.map(([t])=>ASSET_COLORS[t]||'#9a9483'),borderWidth:0}]
     },options:{plugins:{legend:{display:false}},cutout:'65%'}});
   }
 
   // Barres épargne mensuelle
-  charts.c5=new Chart(document.getElementById('c5'),{type:'bar',data:{
+  const ctx5=document.getElementById('c5');
+  if(ctx5) charts.c5=new Chart(ctx5,{type:'bar',data:{
     labels:history.map(h=>h.label),
     datasets:[{label:'Épargne du mois',data:history.map(h=>h.ajout),backgroundColor:'#97c459',borderWidth:0,borderRadius:6}]
   },options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
