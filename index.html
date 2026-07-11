@@ -79,7 +79,33 @@
   .reset{font-size:12px;color:var(--ink3);background:none;border:none;cursor:pointer;text-decoration:underline;}
   .footer{text-align:center;margin-top:24px;}
   .loading{text-align:center;color:var(--ink2);padding:60px 0;font-size:14px;}
+
+  /* ── Navigation bas ─────────── */
+  .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:0.5px solid var(--line);display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom);}
+  .nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 4px 8px;background:none;border:none;cursor:pointer;font-size:10px;color:var(--ink3);gap:3px;transition:color 0.2s;}
+  .nav-btn .icon{font-size:22px;line-height:1;}
+  .nav-btn.active{color:var(--green);}
+  /* ── Sections graphiques ─────── */
+  .chart-section{background:var(--card);border:0.5px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px;}
+  .chart-section h2{font-size:15px;font-weight:600;margin:0 0 14px;}
+  .chart-wrap{position:relative;height:220px;margin-bottom:8px;}
+  /* ── Épargne ─────────────────── */
+  .epargne-goal{background:var(--green-bg);border:0.5px solid var(--green-line);border-radius:12px;padding:16px 18px;margin-bottom:16px;}
+  .epargne-goal h2{font-size:15px;font-weight:600;margin:0 0 10px;color:var(--green);}
+  .goal-progress{height:10px;background:var(--line);border-radius:5px;overflow:hidden;margin:8px 0;}
+  .goal-fill{height:100%;background:var(--green);border-radius:5px;transition:width 0.5s;}
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+  .stat-box{background:var(--card);border:0.5px solid var(--line);border-radius:10px;padding:12px 14px;}
+  .stat-box .lbl{font-size:11px;color:var(--ink2);margin-bottom:4px;}
+  .stat-box .val{font-size:18px;font-weight:600;}
+  .goal-input{display:flex;align-items:center;gap:8px;margin-top:10px;}
+  .goal-input input{flex:1;border:0.5px solid var(--green-line);border-radius:8px;padding:8px 10px;font-size:14px;background:#fff;}
+  .goal-input button{background:var(--green);color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;}
+
 </style>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -98,6 +124,9 @@ let currentKey = null;
 let db = null;
 let auth = null;
 let currentUser = null;
+let activeTab = "budget";
+let savingsGoal = 0;
+let charts = {};
 
 const firebaseConfig = {
   apiKey: "AIzaSyA9cuO9GzC1pJfGhKRz7rBZtXqHFUhLU8o",
@@ -324,6 +353,29 @@ function rowHTML(section, idx, item, withCat){
 }
 
 function render(){
+  const d = months[currentKey];
+  const t = computeTotals(d);
+  const keys = Object.keys(months).sort();
+  const nav = `
+    <nav class="bottom-nav">
+      <button class="nav-btn ${activeTab==='budget'?'active':''}" onclick="switchTab('budget')"><span class="icon">💰</span>Budget</button>
+      <button class="nav-btn ${activeTab==='graphs'?'active':''}" onclick="switchTab('graphs')"><span class="icon">📊</span>Graphiques</button>
+      <button class="nav-btn ${activeTab==='epargne'?'active':''}" onclick="switchTab('epargne')"><span class="icon">🏦</span>Épargne</button>
+    </nav>`;
+  if(activeTab === 'budget') renderBudget(d, t, keys, nav);
+  else if(activeTab === 'graphs') renderGraphs(d, t, nav);
+  else if(activeTab === 'epargne') renderEpargne(d, t, keys, nav);
+}
+
+function switchTab(tab){
+  // Destroy existing charts to avoid canvas reuse errors
+  Object.values(charts).forEach(c => { try{ c.destroy(); }catch(e){} });
+  charts = {};
+  activeTab = tab;
+  render();
+}
+
+function renderBudget(d, t, keys, nav){
   const app = document.getElementById('app');
   const d = months[currentKey];
   const t = computeTotals(d);
@@ -435,9 +487,180 @@ function render(){
       <button class="reset" onclick="resetMonth()">Réinitialiser ce mois</button>
       &nbsp;·&nbsp;
       <button class="reset" onclick="auth.signOut()">Se déconnecter</button>
-      <p class="small" style="margin-top:10px;">Données synchronisées sur tous tes appareils. Connecté : <strong>${currentUser ? currentUser.email : ''}</strong></p>
+      <p class="small" style="margin-top:10px;">Données synchronisées. Connecté : <strong>${currentUser ? currentUser.email : ''}</strong></p>
     </div>
+    ${nav}
   `;
+}
+
+// ── GRAPHIQUES ────────────────────────────────────────────────
+function renderGraphs(d, t, nav){
+  const app = document.getElementById('app');
+  const cbCats = catBreakdown(d.cb);
+  app.innerHTML = `
+    <div class="wrap" style="padding-bottom:80px;">
+      <h1>Graphiques</h1>
+      <p class="sub">${monthLabel(currentKey)}</p>
+
+      <div class="monthbar">
+        <select onchange="changeMonth(this.value)">
+          ${Object.keys(months).sort().map(k=>`<option value="${k}" ${k===currentKey?'selected':''}>  ${monthLabel(k)}</option>`).join('')}
+        </select>
+      </div>
+
+      <div class="chart-section">
+        <h2>Répartition des dépenses</h2>
+        <div class="chart-wrap"><canvas id="chart-depenses"></canvas></div>
+      </div>
+
+      <div class="chart-section">
+        <h2>Recettes vs Dépenses</h2>
+        <div class="chart-wrap"><canvas id="chart-bilan"></canvas></div>
+      </div>
+
+      <div class="chart-section">
+        <h2>Dépenses CB par catégorie</h2>
+        <div class="chart-wrap"><canvas id="chart-cb"></canvas></div>
+      </div>
+    </div>
+    ${nav}
+  `;
+
+  // Chart 1: Pie dépenses
+  const ctx1 = document.getElementById('chart-depenses').getContext('2d');
+  charts['depenses'] = new Chart(ctx1, {
+    type: 'doughnut',
+    data: {
+      labels: ['Charges fixes', 'Épargne', 'Dépenses CB', 'Autres variables'],
+      datasets:[{ data:[t.totalFixes, t.totalEpargne, t.totalCB, t.totalAutresVar],
+        backgroundColor:['#ef9f27','#97c459','#f09595','#85b7eb'],
+        borderWidth:0 }]
+    },
+    options:{ plugins:{ legend:{ position:'bottom', labels:{ font:{ size:12 } } } }, cutout:'60%' }
+  });
+
+  // Chart 2: Bar recettes vs dépenses
+  const ctx2 = document.getElementById('chart-bilan').getContext('2d');
+  charts['bilan'] = new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels: ['Recettes', 'Fixes', 'Épargne', 'Variables', 'Solde fin'],
+      datasets:[{ data:[t.totalRevenusBrut, t.totalFixes, t.totalEpargne, t.totalVariable, t.soldeFin],
+        backgroundColor:['#97c459','#ef9f27','#85b7eb','#f09595', t.soldeFin>=0?'#3b6d11':'#a32d2d'],
+        borderWidth:0, borderRadius:6 }]
+    },
+    options:{ plugins:{ legend:{ display:false } }, scales:{ y:{ beginAtZero:true } } }
+  });
+
+  // Chart 3: Bar CB catégories
+  const ctx3 = document.getElementById('chart-cb').getContext('2d');
+  const cbLabels = cbCats.map(([k])=>k||'Non catégorisé');
+  const cbVals = cbCats.map(([,v])=>v);
+  charts['cb'] = new Chart(ctx3, {
+    type: 'bar',
+    data: {
+      labels: cbLabels.length ? cbLabels : ['Aucune dépense CB'],
+      datasets:[{ data: cbVals.length ? cbVals : [0],
+        backgroundColor:'#85b7eb', borderWidth:0, borderRadius:6 }]
+    },
+    options:{ indexAxis:'y', plugins:{ legend:{ display:false } }, scales:{ x:{ beginAtZero:true } } }
+  });
+}
+
+// ── ÉPARGNE ───────────────────────────────────────────────────
+function renderEpargne(d, t, keys, nav){
+  const app = document.getElementById('app');
+
+  // Historique épargne sur tous les mois
+  const history = keys.map(k => {
+    const md = months[k];
+    const mt = computeTotals(md);
+    return { label: monthLabel(k), total: mt.miseDeCoteTotal, ajout: sum(md.epargne) };
+  });
+
+  const pct = savingsGoal > 0 ? Math.min(100, Math.round(t.miseDeCoteTotal / savingsGoal * 100)) : 0;
+
+  // Projection: moyenne mensuelle des 3 derniers mois
+  const lastMonths = keys.slice(-3).map(k => sum(months[k].epargne));
+  const avgMonthly = lastMonths.length ? lastMonths.reduce((a,b)=>a+b,0)/lastMonths.length : 0;
+  const remaining = savingsGoal > 0 ? Math.max(0, savingsGoal - t.miseDeCoteTotal) : 0;
+  const moisRestants = avgMonthly > 0 && remaining > 0 ? Math.ceil(remaining / avgMonthly) : null;
+
+  app.innerHTML = `
+    <div class="wrap" style="padding-bottom:80px;">
+      <h1>Épargne</h1>
+      <p class="sub">Suivi et projections</p>
+
+      <div class="stat-grid">
+        <div class="stat-box"><div class="lbl">Total épargné</div><div class="val" style="color:var(--green)">${fmt(t.miseDeCoteTotal)}</div></div>
+        <div class="stat-box"><div class="lbl">Ce mois-ci</div><div class="val">${fmt(t.totalEpargne)}</div></div>
+        <div class="stat-box"><div class="lbl">Moy. mensuelle</div><div class="val">${fmt(avgMonthly)}</div></div>
+        <div class="stat-box"><div class="lbl">Taux d'épargne</div><div class="val">${t.totalRevenusBrut>0?Math.round(t.totalEpargne/t.totalRevenusBrut*100):0} %</div></div>
+      </div>
+
+      <div class="epargne-goal">
+        <h2>🎯 Objectif d'épargne</h2>
+        ${savingsGoal > 0 ? `
+          <div style="display:flex;justify-content:space-between;font-size:13px;"><span>${fmt(t.miseDeCoteTotal)}</span><span>${fmt(savingsGoal)}</span></div>
+          <div class="goal-progress"><div class="goal-fill" style="width:${pct}%"></div></div>
+          <div style="font-size:13px;color:var(--ink2);">${pct}% atteint${moisRestants ? ` · encore ~${moisRestants} mois` : ' · objectif atteint 🎉'}</div>
+        ` : '<p style="font-size:13px;color:var(--ink2);margin:0 0 8px;">Définis un objectif pour suivre ta progression.</p>'}
+        <div class="goal-input">
+          <input type="number" step="100" placeholder="Objectif en €" value="${savingsGoal||''}" id="goal-input">
+          <button onclick="setGoal()">Définir</button>
+        </div>
+      </div>
+
+      <div class="chart-section">
+        <h2>Évolution de l'épargne</h2>
+        <div class="chart-wrap"><canvas id="chart-epargne"></canvas></div>
+      </div>
+
+      <div class="chart-section">
+        <h2>Ajout mensuel</h2>
+        <div class="chart-wrap"><canvas id="chart-ajouts"></canvas></div>
+      </div>
+    </div>
+    ${nav}
+  `;
+
+  // Chart évolution cumulative
+  const ctx4 = document.getElementById('chart-epargne').getContext('2d');
+  charts['epargne'] = new Chart(ctx4, {
+    type: 'line',
+    data: {
+      labels: history.map(h=>h.label),
+      datasets:[{
+        label:'Total épargné',
+        data: history.map(h=>h.total),
+        borderColor:'#3b6d11', backgroundColor:'rgba(59,109,17,0.1)',
+        fill:true, tension:0.3, pointRadius:4
+      }, ...(savingsGoal>0?[{
+        label:'Objectif',
+        data: history.map(()=>savingsGoal),
+        borderColor:'#ef9f27', borderDash:[6,4], pointRadius:0, borderWidth:1.5
+      }]:[]) ]
+    },
+    options:{ plugins:{ legend:{ position:'bottom' } }, scales:{ y:{ beginAtZero:true } } }
+  });
+
+  // Chart ajouts mensuels
+  const ctx5 = document.getElementById('chart-ajouts').getContext('2d');
+  charts['ajouts'] = new Chart(ctx5, {
+    type: 'bar',
+    data: {
+      labels: history.map(h=>h.label),
+      datasets:[{ label:'Épargne du mois', data: history.map(h=>h.ajout),
+        backgroundColor:'#97c459', borderWidth:0, borderRadius:6 }]
+    },
+    options:{ plugins:{ legend:{ display:false } }, scales:{ y:{ beginAtZero:true } } }
+  });
+}
+
+function setGoal(){
+  const val = parseFloat(document.getElementById('goal-input').value)||0;
+  savingsGoal = val;
+  render();
 }
 
 function changeMonth(k){ currentKey = k; render(); }
