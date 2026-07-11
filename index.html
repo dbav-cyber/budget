@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Budget">
@@ -424,7 +425,7 @@ function renderBudget(){
   const score=healthScore(d,t);
   const scoreColor=score>=75?'#3b6d11':score>=50?'#854f0b':'#a32d2d';
   const scoreBg=score>=75?'var(--green-bg)':score>=50?'var(--amber-bg)':'var(--red-bg)';
-  const scoreLabel=score>=75?'Bonne sante':'score>=50?Attention':'A ameliorer';
+  const scoreLabel=score>=75?'Bonne sante':(score>=50?'Attention':'A ameliorer');
 
   let alertHTML='';
   if(t.soldeFin<0) alertHTML=`<div class="alert bad">Ce mois finit en negatif (${fmt(t.soldeFin)}).</div>`;
