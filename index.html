@@ -587,7 +587,7 @@ function renderEpargne(nav){
       <!-- LISTE ACTIFS -->
       <section>
         <h2>Mes actifs</h2>
-        ${assetsWithValues.length===0?'<p class="small" style="margin-bottom:12px;">Ajoute tes placements. Tu peux les lier à une ligne épargne du budget pour qu'ils se mettent à jour automatiquement.</p>':''}
+        ${assetsWithValues.length===0?'<p class="small" style="margin-bottom:12px;">Ajoute tes placements. Tu peux les lier à une ligne épargne du budget pour une mise à jour automatique.</p>':''}
         <div style="display:flex;flex-direction:column;gap:10px;">
           ${assetsWithValues.map(a=>{
             const color=ASSET_COLORS[a.type]||'#9a9483';
