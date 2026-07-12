@@ -161,7 +161,7 @@ const db   = firebase.firestore();
 // ── État ──────────────────────────────────────────────────────
 let months={}, currentKey=null, currentUser=null;
 let activeTab='budget', darkMode=false;
-let savingsGoal=0, assets=[], budgetTargets={};
+let savingsGoal=0, assets=[], budgetTargets={}, labelColors={};
 let charts={};
 
 // ── Constantes ────────────────────────────────────────────────
@@ -175,7 +175,9 @@ const CATEGORIES=["Alimentation","Sorties / loisirs","Shopping","Transport","San
 const monthLabel=k=>{ const [y,m]=k.split("-"); return MOIS[parseInt(m,10)-1]+" "+y; };
 const fmt=n=>{ n=parseFloat(n)||0; return n.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})+" €"; };
 const sum=arr=>arr.reduce((a,b)=>a+(parseFloat(b.montant)||0),0);
-const dotColor=label=>{ let h=0; for(const c of (label||'_').toLowerCase()) h=(h*31+c.charCodeAt(0))>>>0; return COLORS[h%COLORS.length]; };
+const autoColor=label=>{ let h=0; for(const c of (label||'_').toLowerCase()) h=(h*31+c.charCodeAt(0))>>>0; return COLORS[h%COLORS.length]; };
+const dotColor=label=>labelColors[label]||autoColor(label);
+function setLabelColor(label,color){ labelColors[label]=color; saveSettings(); }
 
 function emptyMonth(solde,epargne){
   return {
@@ -283,7 +285,7 @@ async function loadData(){
     if(snap.exists) months=snap.data().months||{};
     else months={};
     const sg=await db.collection("budgets").doc(currentUser.uid).collection("data").doc("settings").get();
-    if(sg.exists){ savingsGoal=sg.data().savingsGoal||0; assets=sg.data().assets||[]; budgetTargets=sg.data().budgetTargets||{}; }
+    if(sg.exists){ savingsGoal=sg.data().savingsGoal||0; assets=sg.data().assets||[]; budgetTargets=sg.data().budgetTargets||{}; labelColors=sg.data().labelColors||{}; }
   }catch(e){ months={}; }
   const keys=Object.keys(months).sort();
   if(!keys.length){
@@ -302,7 +304,7 @@ async function save(){
 }
 async function saveSettings(){
   if(!currentUser) return;
-  try{ await db.collection("budgets").doc(currentUser.uid).collection("data").doc("settings").set({savingsGoal,assets,budgetTargets}); }catch(e){}
+  try{ await db.collection("budgets").doc(currentUser.uid).collection("data").doc("settings").set({savingsGoal,assets,budgetTargets,labelColors}); }catch(e){}
 }
 
 function showSaveStatus(s){
@@ -349,6 +351,7 @@ function render(){
 // ── Row helpers ───────────────────────────────────────────────
 function rowHTML(section,idx,item,withCat){
   const color=dotColor(item.label);
+  const safeLabel=(item.label||'').replace(/'/g,'').replace(/"/g,'').replace(/`/g,'');
   const cat=withCat?`<select onchange="updateField('${section}',${idx},'categorie',this.value)">
     <option value="">Cat...</option>
     ${CATEGORIES.map(c=>`<option value="${c}" ${item.categorie===c?'selected':''}>${c}</option>`).join('')}
@@ -357,7 +360,12 @@ function rowHTML(section,idx,item,withCat){
   const noteId=`note-${section}-${idx}`;
   return `<div class="row-wrap">
     <div class="row">
-      <span style="width:9px;height:9px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+      <span style="position:relative;flex-shrink:0;" title="Changer la couleur">
+        <span style="display:block;width:14px;height:14px;border-radius:50%;background:${color};cursor:pointer;border:1.5px solid transparent;" onclick="document.getElementById('cp-${section}-${idx}').click()"></span>
+        <input type="color" id="cp-${section}-${idx}" value="${color}" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none;"
+          oninput="document.getElementById('cp-${section}-${idx}').closest('.row').querySelector('span span').style.background=this.value"
+          onchange="setLabelColor('${safeLabel}',this.value);render();">
+      </span>
       <input type="text" value="${(item.label||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}" placeholder="Libelle"
         oninput="updateField('${section}',${idx},'label',this.value)">
       ${cat}
