@@ -280,13 +280,25 @@ function loginGoogle(){
 
 // ── Firebase data ─────────────────────────────────────────────
 async function loadData(){
+  document.getElementById('app').innerHTML='<p style="text-align:center;color:var(--ink2);padding:60px 0;">Chargement de tes donnees...</p>';
   try{
     const snap=await db.collection("budgets").doc(currentUser.uid).collection("data").doc("months").get();
     if(snap.exists) months=snap.data().months||{};
     else months={};
     const sg=await db.collection("budgets").doc(currentUser.uid).collection("data").doc("settings").get();
     if(sg.exists){ savingsGoal=sg.data().savingsGoal||0; assets=sg.data().assets||[]; budgetTargets=sg.data().budgetTargets||{}; labelColors=sg.data().labelColors||{}; }
-  }catch(e){ months={}; }
+  }catch(e){
+    console.error("Erreur chargement Firebase:",e);
+    document.getElementById('app').innerHTML=`
+      <div style="text-align:center;padding:60px 24px;">
+        <div style="font-size:40px;margin-bottom:16px;">&#9888;</div>
+        <h2>Impossible de charger tes donnees</h2>
+        <p style="color:var(--ink2);">Verifie que les regles Firestore autorisent la lecture.<br>Code erreur : ${e.code||e.message}</p>
+        <button onclick="loadData()" style="background:var(--green);color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer;margin-top:16px;">Reessayer</button>
+        <p style="font-size:12px;color:var(--ink3);margin-top:12px;">Si le probleme persiste, verifie dans Firebase Console > Firestore > Regles que la lecture est autorisee pour ton utilisateur.</p>
+      </div>`;
+    return;
+  }
   const keys=Object.keys(months).sort();
   if(!keys.length){
     const now=new Date();
@@ -296,11 +308,26 @@ async function loadData(){
   render();
 }
 
-async function save(){
+let _saveTimer=null;
+let _lastSaved=null;
+
+function save(){
+  clearTimeout(_saveTimer);
+  showSaveStatus('pending');
+  _saveTimer=setTimeout(()=>_doSave(),800);
+}
+
+async function _doSave(){
   if(!currentUser) return;
   showSaveStatus('saving');
-  try{ await db.collection("budgets").doc(currentUser.uid).collection("data").doc("months").set({months}); showSaveStatus('saved'); }
-  catch(e){ showSaveStatus('error'); }
+  try{
+    await db.collection("budgets").doc(currentUser.uid).collection("data").doc("months").set({months});
+    _lastSaved=new Date();
+    showSaveStatus('saved');
+  }catch(e){
+    console.error(e);
+    showSaveStatus('error');
+  }
 }
 async function saveSettings(){
   if(!currentUser) return;
@@ -310,9 +337,14 @@ async function saveSettings(){
 function showSaveStatus(s){
   const el=document.getElementById('save-status');
   if(!el) return;
-  if(s==='saving'){el.textContent='Sauvegarde...';el.style.color='var(--ink3)';}
-  else if(s==='saved'){el.textContent='Sauvegarder';el.style.color='var(--green)';setTimeout(()=>{if(el)el.textContent='';},3000);}
-  else{el.textContent='Erreur';el.style.color='var(--red)';}
+  if(s==='pending'){el.innerHTML='<span style="opacity:0.5">&#9679; En attente...</span>';el.style.color='var(--ink3)';}
+  else if(s==='saving'){el.innerHTML='&#9651; Sync...';el.style.color='var(--ink3)';}
+  else if(s==='saved'){
+    const t=_lastSaved?_lastSaved.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}):'';
+    el.innerHTML='&#9989; Sync '+t;el.style.color='var(--green)';
+    setTimeout(()=>{if(el)el.innerHTML='';},4000);
+  }
+  else{el.innerHTML='&#10060; Erreur sync - verifie ta connexion';el.style.color='var(--red)';}
 }
 
 // ── Navigation ────────────────────────────────────────────────
@@ -563,11 +595,19 @@ function renderBudget(){
       </section>
 
       <div class="footer">
-        <button class="reset" onclick="exportData()">Exporter</button> &nbsp;&#183;&nbsp;
-        <label class="reset" style="cursor:pointer;">Importer<input type="file" accept=".json" onchange="importData(this)" style="display:none;"></label> &nbsp;&#183;&nbsp;
-        <button class="reset" onclick="resetMonth()">Reinitialiser</button> &nbsp;&#183;&nbsp;
-        <button class="reset" onclick="auth.signOut()">Deconnexion</button>
-        <p class="small">Connecte : ${currentUser?currentUser.email:''}</p>
+        <div style="background:var(--green-bg);border:0.5px solid var(--green-line);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:var(--green);text-align:left;">
+          &#9729; Tes donnees sont sauvegardees automatiquement sur le cloud et accessibles sur tous tes appareils avec ton compte Google.
+        </div>
+        <button class="reset" onclick="resetMonth()">Reinitialiser ce mois</button> &nbsp;&#183;&nbsp;
+        <button class="reset" onclick="auth.signOut()">Deconnexion (${currentUser?currentUser.email:''})</button>
+        <br><br>
+        <details style="font-size:12px;color:var(--ink3);">
+          <summary style="cursor:pointer;">Options avancees (export / import)</summary>
+          <div style="margin-top:8px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+            <button class="reset" onclick="exportData()">Exporter sauvegarde JSON</button>
+            <label class="reset" style="cursor:pointer;">Importer sauvegarde JSON<input type="file" accept=".json" onchange="importData(this)" style="display:none;"></label>
+          </div>
+        </details>
       </div>
     </div>
     ${nav()}`;
