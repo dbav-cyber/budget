@@ -84,6 +84,11 @@ section h2{font-size:15px;font-weight:600;margin:0 0 10px;display:flex;align-ite
 .copy-btn{flex-shrink:0;background:none;border:none;color:var(--ink3);cursor:pointer;font-size:14px;padding:4px 5px;line-height:1;}
 .copy-btn:hover{color:var(--blue);}
 .copy-btn.ok{color:var(--green);}
+.note-btn{flex-shrink:0;background:none;border:none;cursor:pointer;font-size:13px;padding:4px 5px;line-height:1;color:var(--ink3);}
+.note-btn.has-note{color:var(--amber);}
+.note-btn:hover{color:var(--blue);}
+.note-input{width:100%;border:none;border-top:0.5px solid var(--line);background:var(--amber-bg);border-radius:0 0 8px 8px;padding:6px 10px;font-size:12.5px;color:var(--ink);margin-top:2px;resize:none;}
+.row-wrap{display:flex;flex-direction:column;margin-bottom:2px;}
 .addrow{margin-top:8px;background:none;border:0.5px dashed var(--line-strong);border-radius:8px;padding:7px 10px;font-size:13px;color:var(--ink2);cursor:pointer;width:100%;text-align:left;}
 .addrow:hover{background:var(--line);}
 .total{display:flex;justify-content:space-between;border-top:0.5px solid var(--line);margin-top:10px;padding-top:10px;font-size:14px;font-weight:600;}
@@ -348,16 +353,36 @@ function rowHTML(section,idx,item,withCat){
     <option value="">Cat...</option>
     ${CATEGORIES.map(c=>`<option value="${c}" ${item.categorie===c?'selected':''}>${c}</option>`).join('')}
   </select>`:'';
-  return `<div class="row">
-    <span style="width:9px;height:9px;border-radius:50%;background:${color};flex-shrink:0;"></span>
-    <input type="text" value="${(item.label||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}" placeholder="Libelle"
-      oninput="updateField('${section}',${idx},'label',this.value)">
-    ${cat}
-    <input type="number" step="0.01" value="${item.montant||0}"
-      oninput="updateField('${section}',${idx},'montant',this.value)" onblur="render()">
-    <button class="copy-btn" onclick="copyRow('${(item.label||'').replace(/'/g,'').replace(/"/g,'')}',${item.montant||0},this)">&#10696;</button>
-    <button class="del" onclick="deleteRow('${section}',${idx})">x</button>
+  const hasNote=!!(item.note&&item.note.trim());
+  const noteId=`note-${section}-${idx}`;
+  return `<div class="row-wrap">
+    <div class="row">
+      <span style="width:9px;height:9px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+      <input type="text" value="${(item.label||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}" placeholder="Libelle"
+        oninput="updateField('${section}',${idx},'label',this.value)">
+      ${cat}
+      <input type="number" step="0.01" value="${item.montant||0}"
+        oninput="updateField('${section}',${idx},'montant',this.value)" onblur="render()">
+      <button class="note-btn ${hasNote?'has-note':''}" onclick="toggleNote('${noteId}')" title="${hasNote?item.note:'Ajouter une note'}">&#128221;</button>
+      <button class="copy-btn" onclick="copyRow('${(item.label||'').replace(/'/g,'').replace(/"/g,'')}',${item.montant||0},this)">&#10696;</button>
+      <button class="del" onclick="deleteRow('${section}',${idx})">x</button>
+    </div>
+    <div id="${noteId}" style="display:${hasNote?'block':'none'};">
+      <input class="note-input" type="text"
+        value="${(item.note||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}"
+        placeholder="Ajouter une note..."
+        oninput="updateField('${section}',${idx},'note',this.value)"
+        onblur="save()">
+    </div>
   </div>`;
+}
+
+function toggleNote(id){
+  const el=document.getElementById(id);
+  if(!el) return;
+  const visible=el.style.display!=='none';
+  el.style.display=visible?'none':'block';
+  if(!visible) setTimeout(()=>{ const inp=el.querySelector('input'); if(inp) inp.focus(); },50);
 }
 
 function updateField(section,idx,field,value){ months[currentKey][section][idx][field]=value; save(); }
