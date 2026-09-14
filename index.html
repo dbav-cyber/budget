@@ -10,10 +10,7 @@
 <meta name="apple-mobile-web-app-title" content="Budget">
 <meta name="theme-color" content="#f6f5f1">
 <title>Mon Budget</title>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
 <style>
 :root {
   --bg:#f6f5f1; --card:#ffffff; --line:#e4e1d8; --line-strong:#cfcabb;
@@ -144,6 +141,10 @@ section h2{font-size:15px;font-weight:600;margin:0 0 10px;display:flex;align-ite
 <div class="wrap" id="app">
   <p style="text-align:center;color:var(--ink2);padding:60px 0;">Chargement...</p>
 </div>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 // ── Firebase ──────────────────────────────────────────────────
 const firebaseConfig = {
