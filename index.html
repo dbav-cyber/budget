@@ -162,7 +162,7 @@ const db   = firebase.firestore();
 // ── État ──────────────────────────────────────────────────────
 let months={}, currentKey=null, currentUser=null;
 let activeTab='budget', darkMode=false;
-let savingsGoal=0, assets=[], budgetTargets={}, labelColors={};
+let savingsGoal=0, assets=[], budgetTargets={}, labelColors={}, copiedMonth=null;
 let charts={};
 
 // ── Constantes ────────────────────────────────────────────────
@@ -395,6 +395,26 @@ function nav(){ return `<nav class="bottom-nav">
   <button class="nav-btn ${activeTab==='graphs'?'active':''}" onclick="switchTab('graphs')"><span class="icon">&#128202;</span>Graphiques</button>
 </nav>`; }
 
+function copyMonth(){
+  copiedMonth = JSON.parse(JSON.stringify(months[currentKey]));
+  const btn = document.getElementById('paste-btn');
+  if(btn){ btn.disabled=false; btn.style.opacity='1'; }
+  // Flash feedback
+  const copyBtn = document.getElementById('copy-btn');
+  if(copyBtn){ copyBtn.textContent='Copie !'; setTimeout(()=>{ copyBtn.textContent='Copier'; },1500); }
+}
+
+function pasteMonth(){
+  if(!copiedMonth) return;
+  if(!confirm('Coller les donnees copiees dans ce mois ? Les donnees actuelles seront remplacees.')) return;
+  const soldeDebut = months[currentKey].soldeDebut;
+  const miseDeCote = months[currentKey].miseDeCotePrecedente;
+  months[currentKey] = JSON.parse(JSON.stringify(copiedMonth));
+  months[currentKey].soldeDebut = soldeDebut;
+  months[currentKey].miseDeCotePrecedente = miseDeCote;
+  save(); render();
+}
+
 function render(){
   if(activeTab==='budget') renderBudget();
   else renderGraphs();
@@ -529,6 +549,8 @@ function renderBudget(){
       <div class="topbar">
         <select onchange="changeMonth(this.value)">${keys.map(k=>`<option value="${k}" ${k===currentKey?'selected':''}>${monthLabel(k)}</option>`).join('')}</select>
         <button onclick="addNewMonth()">+ Mois suivant</button>
+        <button id="copy-btn" onclick="copyMonth()" title="Copier ce mois" style="background:var(--blue-bg);color:var(--blue);border-color:var(--blue-line);">Copier</button>
+        <button id="paste-btn" onclick="pasteMonth()" title="Coller dans ce mois" style="background:var(--amber-bg);color:var(--amber);border-color:var(--amber-line);opacity:${copiedMonth?'1':'0.4'};" ${copiedMonth?'':'disabled'}>Coller</button>
         <span class="save-status" id="save-status"></span>
       </div>
 
