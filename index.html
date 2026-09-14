@@ -263,21 +263,42 @@ initDark();
 auth.onAuthStateChanged(user=>{ if(user){currentUser=user;loadData();}else{currentUser=null;showLogin();} });
 
 function showLogin(){
-  document.getElementById('app').innerHTML=`
+  const isHttps = location.protocol === 'https:' || location.protocol === 'http:';
+  document.getElementById('app').innerHTML = isHttps ? `
     <div class="login-screen">
       <div class="login-icon">&#8364;</div>
       <h1>Mon Budget</h1>
       <p style="color:var(--ink2);margin:0;max-width:280px;">Connecte-toi pour synchroniser ton budget sur tous tes appareils.</p>
       <button class="login-btn" onclick="loginGoogle()">Continuer avec Google</button>
       <p style="color:var(--red);font-size:13px;display:none;" id="login-error"></p>
+    </div>` : `
+    <div class="login-screen">
+      <div class="login-icon" style="background:var(--amber);">&#9888;</div>
+      <h1>Ouvre l'app via Netlify</h1>
+      <p style="color:var(--ink2);margin:0;max-width:300px;">L'app ne peut pas fonctionner depuis un fichier local. Ouvre-la via ton URL Netlify.</p>
+      <a href="https://velvety-eclair-a824de.netlify.app" style="background:var(--green);color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:15px;font-weight:600;text-decoration:none;margin-top:8px;">
+        Ouvrir l'app
+      </a>
     </div>`;
 }
+
 function loginGoogle(){
-  auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(e=>{
-    const el=document.getElementById('login-error');
-    if(el){el.style.display='block';el.textContent='Erreur : '+e.message;}
+  const provider = new firebase.auth.GoogleAuthProvider();
+  auth.signInWithPopup(provider).catch(e=>{
+    if(e.code === 'auth/operation-not-supported-in-this-environment' || e.code === 'auth/popup-blocked'){
+      // Fallback: redirect
+      auth.signInWithRedirect(provider);
+    } else {
+      const el=document.getElementById('login-error');
+      if(el){el.style.display='block';el.textContent='Erreur : '+e.message;}
+    }
   });
 }
+
+// Handle redirect result on page load
+auth.getRedirectResult().then(result=>{
+  if(result && result.user){ currentUser=result.user; loadData(); }
+}).catch(e=>console.warn('Redirect result:', e));
 
 // ── Firebase data ─────────────────────────────────────────────
 async function loadData(){
