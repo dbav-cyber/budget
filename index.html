@@ -162,7 +162,7 @@ const db   = firebase.firestore();
 // ── État ──────────────────────────────────────────────────────
 let months={}, currentKey=null, currentUser=null;
 let activeTab='budget', darkMode=false;
-let savingsGoal=0, assets=[], budgetTargets={}, labelColors={}, copiedMonth=null;
+let savingsGoal=0, assets=[], budgetTargets={}, labelColors={}, copiedMonth=null, passifs=[];
 let charts={};
 
 // ── Constantes ────────────────────────────────────────────────
@@ -308,7 +308,7 @@ async function loadData(){
     if(snap.exists) months=snap.data().months||{};
     else months={};
     const sg=await db.collection("budgets").doc(currentUser.uid).collection("data").doc("settings").get();
-    if(sg.exists){ savingsGoal=sg.data().savingsGoal||0; assets=sg.data().assets||[]; budgetTargets=sg.data().budgetTargets||{}; labelColors=sg.data().labelColors||{}; }
+    if(sg.exists){ savingsGoal=sg.data().savingsGoal||0; assets=sg.data().assets||[]; budgetTargets=sg.data().budgetTargets||{}; labelColors=sg.data().labelColors||{}; passifs=sg.data().passifs||[]; }
   }catch(e){
     console.error("Erreur chargement Firebase:",e);
     document.getElementById('app').innerHTML=`
@@ -353,7 +353,7 @@ async function _doSave(){
 }
 async function saveSettings(){
   if(!currentUser) return;
-  try{ await db.collection("budgets").doc(currentUser.uid).collection("data").doc("settings").set({savingsGoal,assets,budgetTargets,labelColors}); }catch(e){}
+  try{ await db.collection("budgets").doc(currentUser.uid).collection("data").doc("settings").set({savingsGoal,assets,budgetTargets,labelColors,passifs}); }catch(e){}
 }
 
 function showSaveStatus(s){
@@ -393,6 +393,7 @@ function addNewMonth(){
 function nav(){ return `<nav class="bottom-nav">
   <button class="nav-btn ${activeTab==='budget'?'active':''}" onclick="switchTab('budget')"><span class="icon">&#128176;</span>Budget</button>
   <button class="nav-btn ${activeTab==='graphs'?'active':''}" onclick="switchTab('graphs')"><span class="icon">&#128202;</span>Graphiques</button>
+  <button class="nav-btn ${activeTab==='analyse'?'active':''}" onclick="switchTab('analyse')"><span class="icon">&#128200;</span>Analyse</button>
 </nav>`; }
 
 function copyMonth(){
@@ -417,7 +418,8 @@ function pasteMonth(){
 
 function render(){
   if(activeTab==='budget') renderBudget();
-  else renderGraphs();
+  else if(activeTab==='graphs') renderGraphs();
+  else renderAnalyse();
 }
 
 // ── Row helpers ───────────────────────────────────────────────
@@ -909,6 +911,238 @@ function renderEpargne(){
     labels:history.map(h=>h.label),
     datasets:[{label:'Epargne du mois',data:history.map(h=>h.ajout),backgroundColor:'#97c459',borderWidth:0,borderRadius:6}]
   },options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{color:darkMode?'#9a97a8':'#6b6657'}},x:{ticks:{color:darkMode?'#9a97a8':'#6b6657'}}}}});
+}
+
+// ── PASSIFS ───────────────────────────────────────────────────
+const PASSIF_TYPES=["Credit conso","Credit auto","Pret immobilier","Decouvert","Autre"];
+function addPassif(){ passifs.push({id:Date.now(),label:"",type:"Credit conso",montant:0,mensualite:0}); saveSettings(); render(); }
+function deletePassif(id){ passifs=passifs.filter(p=>p.id!==id); saveSettings(); render(); }
+function updatePassif(id,field,value){
+  const p=passifs.find(x=>x.id===id); if(!p) return;
+  p[field]=['montant','mensualite'].includes(field)?(parseFloat(value)||0):value;
+}
+
+// ── ONGLET ANALYSE ────────────────────────────────────────────
+function renderAnalyse(){
+  const keys=Object.keys(months).sort();
+  const currentYear=currentKey.split('-')[0];
+  const yearKeys=keys.filter(k=>k.startsWith(currentYear));
+  const allYears=[...new Set(keys.map(k=>k.split('-')[0]))];
+
+  // Totaux annuels
+  const yearTotals=yearKeys.map(k=>{
+    const t=computeTotals(months[k]);
+    return {key:k,label:monthLabel(k),...t};
+  });
+  const sumRevenu=yearTotals.reduce((s,t)=>s+t.totalRevenusBrut,0);
+  const sumFixes=yearTotals.reduce((s,t)=>s+t.totalFixes,0);
+  const sumEpargne=yearTotals.reduce((s,t)=>s+t.totalEpargne,0);
+  const sumCB=yearTotals.reduce((s,t)=>s+t.totalCB,0);
+  const sumVar=yearTotals.reduce((s,t)=>s+t.totalAutresVar,0);
+  const sumDepenses=yearTotals.reduce((s,t)=>s+t.totalFixes+t.totalVariable,0);
+
+  // Projection (moyenne 3 derniers mois)
+  const last3keys=keys.slice(-3);
+  const avgRevenu=last3keys.reduce((s,k)=>s+computeTotals(months[k]).totalRevenusBrut,0)/Math.max(last3keys.length,1);
+  const avgEpargne=last3keys.reduce((s,k)=>s+computeTotals(months[k]).totalEpargne,0)/Math.max(last3keys.length,1);
+  const avgSolde=last3keys.reduce((s,k)=>s+computeTotals(months[k]).soldeFin,0)/Math.max(last3keys.length,1);
+  const avgDepenses=last3keys.reduce((s,k)=>s+computeTotals(months[k]).totalFixes+computeTotals(months[k]).totalVariable,0)/Math.max(last3keys.length,1);
+  const lastMiseDeCote=keys.length?computeTotals(months[keys[keys.length-1]]).miseDeCoteTotal:0;
+  const projMonths=[1,2,3,4,5,6].map(n=>({
+    n, epargne:lastMiseDeCote+avgEpargne*n, solde:avgSolde
+  }));
+
+  // Tendances CB par categorie
+  const cbTrends={};
+  keys.forEach(k=>{
+    months[k].cb.forEach(item=>{
+      const cat=item.categorie||"Non cat.";
+      if(!cbTrends[cat]) cbTrends[cat]=[];
+      // find or create entry for this month
+      const existing=cbTrends[cat].find(e=>e.key===k);
+      if(existing) existing.val+=parseFloat(item.montant)||0;
+      else cbTrends[cat].push({key:k,label:monthLabel(k),val:parseFloat(item.montant)||0});
+    });
+  });
+  // Pad missing months with 0
+  Object.keys(cbTrends).forEach(cat=>{
+    keys.forEach(k=>{ if(!cbTrends[cat].find(e=>e.key===k)) cbTrends[cat].push({key:k,label:monthLabel(k),val:0}); });
+    cbTrends[cat].sort((a,b)=>a.key.localeCompare(b.key));
+  });
+  const topCats=Object.entries(cbTrends).sort((a,b)=>b[1].reduce((s,e)=>s+e.val,0)-a[1].reduce((s,e)=>s+e.val,0)).slice(0,5);
+
+  // Passifs
+  const totalPassifs=passifs.reduce((s,p)=>s+(parseFloat(p.montant)||0),0);
+  const totalActifs=assets.reduce((s,a)=>{ const v=a.linkedLabel?computeAssetValue(a).current:(parseFloat(a.value)||0); return s+v; },0);
+  const patrimoineNet=totalActifs-totalPassifs;
+
+  document.getElementById('app').innerHTML=`
+    <div class="wrap" style="padding-bottom:90px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <h1>Analyse</h1>
+        <button class="dark-btn" onclick="toggleDark()">${darkMode?'&#9728;':'&#9790;'}</button>
+      </div>
+
+      <!-- SELECTEUR ANNEE -->
+      <div class="topbar" style="margin-bottom:20px;">
+        <select onchange="window._analyseYear=this.value;renderAnalyse();">
+          ${allYears.map(y=>`<option value="${y}" ${y===currentYear?'selected':''}>${y}</option>`).join('')}
+        </select>
+      </div>
+
+      <!-- RECAPITULATIF ANNUEL -->
+      <section>
+        <h2>Recapitulatif ${currentYear}</h2>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--line);color:var(--ink2);">
+                <th style="text-align:left;padding:6px 4px;">Mois</th>
+                <th style="text-align:right;padding:6px 4px;">Recettes</th>
+                <th style="text-align:right;padding:6px 4px;">Depenses</th>
+                <th style="text-align:right;padding:6px 4px;">Epargne</th>
+                <th style="text-align:right;padding:6px 4px;">Solde fin</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${yearTotals.map(t=>`
+                <tr style="border-bottom:0.5px solid var(--line);cursor:pointer;" onclick="currentKey='${t.key}';switchTab('budget');">
+                  <td style="padding:7px 4px;font-weight:500;">${t.label}</td>
+                  <td style="text-align:right;padding:7px 4px;color:var(--green);">${fmt(t.totalRevenusBrut)}</td>
+                  <td style="text-align:right;padding:7px 4px;color:var(--red);">${fmt(t.totalFixes+t.totalVariable)}</td>
+                  <td style="text-align:right;padding:7px 4px;color:var(--blue);">${fmt(t.totalEpargne)}</td>
+                  <td style="text-align:right;padding:7px 4px;font-weight:600;color:${t.soldeFin>=0?'var(--green)':'var(--red)'};">${fmt(t.soldeFin)}</td>
+                </tr>`).join('')}
+            </tbody>
+            <tfoot>
+              <tr style="border-top:1.5px solid var(--line-strong);font-weight:700;">
+                <td style="padding:8px 4px;">TOTAL</td>
+                <td style="text-align:right;padding:8px 4px;color:var(--green);">${fmt(sumRevenu)}</td>
+                <td style="text-align:right;padding:8px 4px;color:var(--red);">${fmt(sumDepenses)}</td>
+                <td style="text-align:right;padding:8px 4px;color:var(--blue);">${fmt(sumEpargne)}</td>
+                <td style="text-align:right;padding:8px 4px;"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div class="chart-wrap" style="margin-top:16px;"><canvas id="c-annual"></canvas></div>
+      </section>
+
+      <!-- PROJECTION 6 MOIS -->
+      <section>
+        <h2>Projection 6 mois</h2>
+        <p class="small">Basee sur la moyenne de tes ${last3keys.length} derniers mois.</p>
+        <div class="stat-grid">
+          <div class="stat-box"><div class="lbl">Recettes moy./mois</div><div class="val">${fmt(avgRevenu)}</div></div>
+          <div class="stat-box"><div class="lbl">Depenses moy./mois</div><div class="val">${fmt(avgDepenses)}</div></div>
+          <div class="stat-box"><div class="lbl">Epargne moy./mois</div><div class="val" style="color:var(--green);">${fmt(avgEpargne)}</div></div>
+          <div class="stat-box"><div class="lbl">Solde fin moy./mois</div><div class="val" style="color:${avgSolde>=0?'var(--green)':'var(--red)'};">${fmt(avgSolde)}</div></div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+            <thead>
+              <tr style="border-bottom:1px solid var(--line);color:var(--ink2);">
+                <th style="text-align:left;padding:6px 4px;">Dans</th>
+                <th style="text-align:right;padding:6px 4px;">Epargne cumulee</th>
+                <th style="text-align:right;padding:6px 4px;">Solde prevu</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${projMonths.map(p=>`
+                <tr style="border-bottom:0.5px solid var(--line);">
+                  <td style="padding:7px 4px;font-weight:500;">${p.n} mois</td>
+                  <td style="text-align:right;padding:7px 4px;color:var(--green);font-weight:600;">${fmt(p.epargne)}</td>
+                  <td style="text-align:right;padding:7px 4px;color:${p.solde>=0?'var(--green)':'var(--red)'};">${fmt(p.solde)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="chart-wrap" style="margin-top:16px;"><canvas id="c-proj"></canvas></div>
+      </section>
+
+      <!-- TENDANCES CB -->
+      ${topCats.length>0?`
+      <section>
+        <h2>Tendances depenses CB</h2>
+        <div class="chart-wrap"><canvas id="c-trends"></canvas></div>
+      </section>`:''}
+
+      <!-- PASSIFS -->
+      <section>
+        <h2>Passifs / Credits</h2>
+        <div style="background:${patrimoineNet>=0?'var(--green-bg)':'var(--red-bg)'};border:0.5px solid ${patrimoineNet>=0?'var(--green-line)':'var(--red-line)'};border-radius:10px;padding:12px 14px;margin-bottom:14px;">
+          <div style="font-size:12px;color:var(--ink2);margin-bottom:4px;">Patrimoine net (actifs - passifs)</div>
+          <div style="font-size:24px;font-weight:700;color:${patrimoineNet>=0?'var(--green)':'var(--red)'};">${fmt(patrimoineNet)}</div>
+          <div style="font-size:12px;color:var(--ink2);margin-top:4px;">Actifs : ${fmt(totalActifs)} &nbsp;|&nbsp; Dettes : ${fmt(totalPassifs)}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${passifs.map(p=>`
+            <div style="background:var(--bg);border-radius:10px;padding:12px 14px;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                <div style="width:32px;height:32px;border-radius:8px;background:var(--red-bg);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:var(--red);flex-shrink:0;">${(p.label||'?')[0].toUpperCase()}</div>
+                <div style="flex:1;">
+                  <input type="text" value="${(p.label||'').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}" placeholder="Nom du credit"
+                    oninput="updatePassif(${p.id},'label',this.value)"
+                    style="width:100%;border:none;background:transparent;font-size:14px;font-weight:600;color:var(--ink);padding:0;" onblur="saveSettings()">
+                  <select onchange="updatePassif(${p.id},'type',this.value);saveSettings();render();"
+                    style="border:none;background:transparent;font-size:12px;color:var(--ink2);padding:0;cursor:pointer;">
+                    ${PASSIF_TYPES.map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}
+                  </select>
+                </div>
+                <button onclick="deletePassif(${p.id})" style="background:none;border:none;color:var(--ink3);cursor:pointer;font-size:18px;padding:2px 6px;">x</button>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div>
+                  <div style="font-size:11px;color:var(--ink2);margin-bottom:3px;">Capital restant du (EUR)</div>
+                  <input type="number" step="0.01" value="${p.montant||0}"
+                    oninput="updatePassif(${p.id},'montant',this.value)" onblur="saveSettings();render();"
+                    style="width:100%;border:0.5px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px;background:var(--card);color:var(--red);font-weight:600;">
+                </div>
+                <div>
+                  <div style="font-size:11px;color:var(--ink2);margin-bottom:3px;">Mensualite (EUR)</div>
+                  <input type="number" step="0.01" value="${p.mensualite||0}"
+                    oninput="updatePassif(${p.id},'mensualite',this.value)" onblur="saveSettings();render();"
+                    style="width:100%;border:0.5px solid var(--line);border-radius:6px;padding:6px 8px;font-size:13px;background:var(--card);color:var(--ink);">
+                </div>
+              </div>
+            </div>`).join('')}
+        </div>
+        <button class="addrow" onclick="addPassif()" style="margin-top:10px;">+ Ajouter un credit / dette</button>
+      </section>
+    </div>
+    ${nav()}`;
+
+  // Graphique annuel
+  const ctxA=document.getElementById('c-annual');
+  if(ctxA) charts['annual']=new Chart(ctxA,{type:'bar',data:{
+    labels:yearTotals.map(t=>t.label),
+    datasets:[
+      {label:'Recettes',data:yearTotals.map(t=>t.totalRevenusBrut),backgroundColor:'#97c459',borderRadius:4,borderWidth:0},
+      {label:'Depenses',data:yearTotals.map(t=>t.totalFixes+t.totalVariable),backgroundColor:'#f09595',borderRadius:4,borderWidth:0},
+      {label:'Epargne',data:yearTotals.map(t=>t.totalEpargne),backgroundColor:'#85b7eb',borderRadius:4,borderWidth:0}
+    ]
+  },options:{plugins:{legend:{position:'bottom',labels:{color:darkMode?'#e8e6e0':'#23211c'}}},scales:{x:{ticks:{color:darkMode?'#9a97a8':'#6b6657'}},y:{beginAtZero:true,ticks:{color:darkMode?'#9a97a8':'#6b6657'}}}}});
+
+  // Graphique projection epargne
+  const ctxP=document.getElementById('c-proj');
+  if(ctxP) charts['proj']=new Chart(ctxP,{type:'line',data:{
+    labels:projMonths.map(p=>'Dans '+p.n+' mois'),
+    datasets:[{label:'Epargne cumulee',data:projMonths.map(p=>p.epargne),borderColor:'#3b6d11',backgroundColor:'rgba(59,109,17,0.1)',fill:true,tension:0.3,pointRadius:4}]
+  },options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:false,ticks:{color:darkMode?'#9a97a8':'#6b6657'}},x:{ticks:{color:darkMode?'#9a97a8':'#6b6657'}}}}});
+
+  // Graphique tendances CB
+  const ctxT=document.getElementById('c-trends');
+  const trendColors=['#534AB7','#3b6d11','#ef9f27','#f09595','#85b7eb'];
+  if(ctxT && topCats.length>0) charts['trends']=new Chart(ctxT,{type:'line',data:{
+    labels:keys.map(monthLabel),
+    datasets:topCats.map(([cat,data],i)=>({
+      label:cat,
+      data:keys.map(k=>{ const e=data.find(d=>d.key===k); return e?e.val:0; }),
+      borderColor:trendColors[i%trendColors.length],
+      backgroundColor:'transparent',
+      tension:0.3,pointRadius:3,borderWidth:2
+    }))
+  },options:{plugins:{legend:{position:'bottom',labels:{color:darkMode?'#e8e6e0':'#23211c'}}},scales:{y:{beginAtZero:true,ticks:{color:darkMode?'#9a97a8':'#6b6657'}},x:{ticks:{color:darkMode?'#9a97a8':'#6b6657'}}}}});
 }
 
 function setGoal(){
