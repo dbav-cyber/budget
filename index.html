@@ -1179,215 +1179,277 @@ function renderAnalyse(){
 }
 
 
+
 // ── IMPORT RELEVE BANCAIRE ────────────────────────────────────
 let importRows = [];
 
 function openImport(){
-  // Remove existing modal if any
   const existing = document.getElementById('import-modal');
   if(existing) existing.remove();
-
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.id = 'import-modal';
   modal.innerHTML = `
     <div class="modal">
-      <h2>Importer un releve <button class="modal-close" onclick="document.getElementById('import-modal').remove()">x</button></h2>
+      <h2>Importer un releve bancaire <button class="modal-close" onclick="document.getElementById('import-modal').remove()">x</button></h2>
       <div class="import-drop" id="drop-zone" onclick="document.getElementById('file-input-import').click()">
         <div class="icon">&#128196;</div>
-        <div style="font-weight:600;margin-bottom:4px;">Glisse ton releve ici</div>
-        <div style="font-size:13px;color:var(--ink2);">CSV ou PDF acceptes</div>
+        <div style="font-weight:600;margin-bottom:6px;">Glisse ton releve ici ou clique</div>
+        <div style="font-size:12.5px;color:var(--ink2);">CSV (BoursoBank, LCL, CIC, BNP, Revolut...) ou PDF</div>
         <input type="file" id="file-input-import" accept=".csv,.pdf,.txt" style="display:none" onchange="handleImportFile(this.files[0])">
       </div>
       <div id="import-preview"></div>
     </div>`;
-
-  // Drag and drop
   modal.addEventListener('dragover', e=>{ e.preventDefault(); document.getElementById('drop-zone').classList.add('drag'); });
-  modal.addEventListener('dragleave', ()=>{ document.getElementById('drop-zone').classList.remove('drag'); });
+  modal.addEventListener('dragleave', ()=>document.getElementById('drop-zone').classList.remove('drag'));
   modal.addEventListener('drop', e=>{ e.preventDefault(); document.getElementById('drop-zone').classList.remove('drag'); handleImportFile(e.dataTransfer.files[0]); });
   modal.addEventListener('click', e=>{ if(e.target===modal) modal.remove(); });
-
   document.body.appendChild(modal);
 }
 
 async function handleImportFile(file){
   if(!file) return;
   const preview = document.getElementById('import-preview');
-  preview.innerHTML = '<p style="color:var(--ink2);text-align:center;">Analyse en cours...</p>';
-
+  preview.innerHTML = '<p style="color:var(--ink2);text-align:center;padding:20px;">Analyse en cours...</p>';
   try{
     let rows = [];
-    if(file.name.toLowerCase().endsWith('.pdf')){
+    const name = file.name.toLowerCase();
+    if(name.endsWith('.pdf')){
       rows = await parsePDF(file);
     } else {
-      const text = await file.text();
+      let text = '';
+      try { text = await file.text(); } catch(e){ text = await readWithEncoding(file, 'iso-8859-1'); }
       rows = parseCSV(text);
     }
-
-    if(!rows.length){ preview.innerHTML = '<p style="color:var(--red);">Aucune transaction detectee. Verifie le format du fichier.</p>'; return; }
-
+    if(!rows.length){
+      preview.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:32px;">&#129300;</div><p style="color:var(--red);font-weight:600;">Aucune transaction detectee</p><p style="font-size:13px;color:var(--ink2);">Verifie que le fichier est un export CSV de ta banque. Essaie de l\'exporter depuis ton espace bancaire en ligne.</p></div>';
+      return;
+    }
     importRows = rows;
-    renderImportPreview(rows);
+    renderImportPreview();
   } catch(e){
-    preview.innerHTML = `<p style="color:var(--red);">Erreur : ${e.message}</p>`;
+    preview.innerHTML = `<p style="color:var(--red);padding:12px;">Erreur : ${e.message}</p>`;
+    console.error(e);
   }
 }
 
+function readWithEncoding(file, encoding){
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=e=>res(e.target.result); r.onerror=rej; r.readAsText(file,encoding); });
+}
+
 function parseCSV(text){
-  const lines = text.split(/\r?\n/).filter(l=>l.trim());
-  if(lines.length < 2) return [];
-
-  // Detect separator
-  const sep = lines[0].includes(';') ? ';' : ',';
-  const headers = lines[0].split(sep).map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase());
-
-  // Try to detect columns
-  const dateIdx = headers.findIndex(h=>h.includes('date'));
-  const labelIdx = headers.findIndex(h=>['libelle','label','description','intitule','operation','reference','detail','wording'].some(k=>h.includes(k)));
-  const amountIdx = headers.findIndex(h=>['montant','amount','valeur','debit','credit','somme'].some(k=>h.includes(k)));
-  const debitIdx = headers.findIndex(h=>h.includes('debit') || h.includes('sortie'));
-  const creditIdx = headers.findIndex(h=>h.includes('credit') || h.includes('entree'));
+  text = text.replace(/^\uFEFF/,'').replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+  const lines = text.split('\n');
+  let startLine = 0;
+  for(let i=0;i<Math.min(15,lines.length);i++){
+    if(lines[i].match(/\d{2}[\/\.\-]\d{2}[\/\.\-]\d{2,4}/) || lines[i].match(/^\d{4}-\d{2}-\d{2}/)){
+      startLine = i; break;
+    }
+  }
+  const sampleLine = lines[startLine]||lines[0]||'';
+  const sep = sampleLine.split(';').length > sampleLine.split(',').length ? ';' : ',';
+  let headerLine = startLine > 0 ? startLine-1 : 0;
+  // Find actual header (line with text labels)
+  for(let i=Math.max(0,startLine-3);i<=startLine;i++){
+    if(lines[i] && /date|libel|label|descri|montant|debit|credit|amount/i.test(lines[i])){ headerLine=i; break; }
+  }
+  const headers = (lines[headerLine]||'').split(sep).map(h=>h.replace(/^["']/,'').replace(/["']$/,'').trim().toLowerCase());
+  const iDate   = findCol(headers,['date','datum','jour']);
+  const iLabel  = findCol(headers,['libelle','label','description','intitule','operation','wording','nom','objet','detail','reference','beneficiaire','tiers','motif']);
+  const iAmount = findCol(headers,['montant','amount','valeur','somme']);
+  const iDebit  = findCol(headers,['debit','sortie','paiement','charge']);
+  const iCredit = findCol(headers,['credit','entree','recette','encaissement','versement']);
 
   const rows = [];
-  for(let i=1; i<lines.length; i++){
-    const cols = lines[i].split(sep).map(c=>c.replace(/^"|"$/g,'').trim());
+  for(let i=startLine;i<lines.length;i++){
+    const line = lines[i].trim();
+    if(!line) continue;
+    const cols = splitCSVLine(line, sep);
     if(cols.length < 2) continue;
-
-    let date = dateIdx>=0 ? cols[dateIdx] : '';
-    let label = labelIdx>=0 ? cols[labelIdx] : cols[1]||'';
+    let date = iDate>=0 ? cols[iDate] : '';
+    let label = iLabel>=0 ? cols[iLabel] : cols.find(c=>c.length>3 && !/^[0-9,.\- ]+$/.test(c))||'';
+    label = label.replace(/^["']|["']$/g,'').trim();
+    if(!label || label === lines[headerLine].split(sep)[iLabel]) continue;
     let amount = 0;
-
-    if(amountIdx>=0){
-      amount = parseFloat((cols[amountIdx]||'0').replace(',','.').replace(/[^0-9.-]/g,''));
-    } else if(debitIdx>=0 || creditIdx>=0){
-      const debit = parseFloat((cols[debitIdx]||'0').replace(',','.').replace(/[^0-9.-]/g,''))||0;
-      const credit = parseFloat((cols[creditIdx]||'0').replace(',','.').replace(/[^0-9.-]/g,''))||0;
-      amount = credit - debit;
+    if(iAmount>=0 && cols[iAmount]){
+      amount = parseMontant(cols[iAmount]);
+    } else if(iDebit>=0 || iCredit>=0){
+      const debit  = iDebit>=0  ? parseMontant(cols[iDebit]||'0')  : 0;
+      const credit = iCredit>=0 ? parseMontant(cols[iCredit]||'0') : 0;
+      amount = credit > 0 ? credit : -Math.abs(debit);
+    } else {
+      const nums = cols.filter(c=>c.trim() && /^-?[\d\s,.]+$/.test(c.trim()));
+      if(nums.length) amount = parseMontant(nums[nums.length-1]);
     }
-
-    if(!label && !amount) continue;
-    const cat = guessCategory(label);
-    rows.push({date, label, amount, categorie:cat, skip:false});
+    if(amount===0 && !/\d/.test(line)) continue;
+    date = normalizeDate(date);
+    const isDebit = amount <= 0;
+    rows.push({date, label, amount, categorie:guessCategory(label), skip:false, editLabel:label, editAmount:Math.abs(amount), isDebit});
   }
   return rows;
 }
 
-async function parsePDF(file){
-  if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js non charge. Verifie ta connexion.');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
-  let fullText = '';
-  for(let i=1; i<=pdf.numPages; i++){
-    const page = await pdf.getPage(i);
-    const tc = await page.getTextContent();
-    fullText += tc.items.map(item=>item.str).join(' ') + '\n';
+function findCol(headers, keywords){
+  for(const kw of keywords){ const idx=headers.findIndex(h=>h.includes(kw)); if(idx>=0) return idx; }
+  return -1;
+}
+
+function splitCSVLine(line, sep){
+  const result=[]; let cur='', inQ=false;
+  for(const ch of line){
+    if(ch==='"'||ch==="'") inQ=!inQ;
+    else if(ch===sep&&!inQ){ result.push(cur.trim()); cur=''; }
+    else cur+=ch;
   }
-  // Try to extract lines with amounts
-  const rows = [];
-  const amountRegex = /(-?\d{1,3}(?:[\s.,]\d{3})*(?:[.,]\d{2})?)\s*EUR?/gi;
-  const dateRegex = /\b(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b/;
-  const lines2 = fullText.split('\n');
-  lines2.forEach(line=>{
-    const dateMatch = line.match(dateRegex);
-    const amtMatches = [...line.matchAll(amountRegex)];
-    if(dateMatch && amtMatches.length){
-      const amount = parseFloat(amtMatches[0][1].replace(/[\s]/g,'').replace(',','.'));
-      const label = line.replace(dateRegex,'').replace(amountRegex,'').trim().slice(0,60);
-      if(label && !isNaN(amount)){
-        rows.push({date:dateMatch[0], label, amount, categorie:guessCategory(label), skip:false});
-      }
+  result.push(cur.trim());
+  return result;
+}
+
+function parseMontant(str){
+  if(!str||!str.trim()) return 0;
+  let s = str.replace(/[€$£\s\u00A0]/g,'').trim();
+  if(/\d[.,]\d{3}[.,]\d{2}$/.test(s)) s=s.replace(/[.,](\d{3})[.,]/,'$1.');
+  else s=s.replace(/\.(\d{3})(?=,)/,'$1').replace(',','.');
+  return parseFloat(s)||0;
+}
+
+function normalizeDate(str){
+  if(!str) return '';
+  let m=str.match(/(\d{2})[\/\.\-](\d{2})[\/\.\-](\d{4})/);
+  if(m) return `${m[1]}/${m[2]}/${m[3]}`;
+  m=str.match(/(\d{4})[\/\.\-](\d{2})[\/\.\-](\d{2})/);
+  if(m) return `${m[3]}/${m[2]}/${m[1]}`;
+  return str.slice(0,10);
+}
+
+async function parsePDF(file){
+  if(typeof pdfjsLib==='undefined') throw new Error('PDF.js non charge - verifie ta connexion.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  let allText='';
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    const items=tc.items.sort((a,b)=>b.transform[5]-a.transform[5]);
+    let lastY=null, line='';
+    for(const item of items){
+      const y=Math.round(item.transform[5]);
+      if(lastY!==null && Math.abs(y-lastY)>3){ allText+=line+'\n'; line=''; }
+      line+=item.str+' '; lastY=y;
     }
-  });
+    if(line) allText+=line+'\n';
+  }
+  const rows=[];
+  const dateRe=/\b(\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4})\b/;
+  const amtRe=/-?\d{1,3}(?:[\s.,]\d{3})*[.,]\d{2}/g;
+  for(const line of allText.split('\n')){
+    const dateMatch=line.match(dateRe);
+    const amtMatches=[...line.matchAll(amtRe)];
+    if(!dateMatch||!amtMatches.length) continue;
+    const rawAmt=amtMatches[amtMatches.length-1][0];
+    const amount=parseMontant(rawAmt);
+    if(!amount||Math.abs(amount)<0.01) continue;
+    let label=line.replace(dateRe,'').replace(amtRe,'').replace(/[^\w\s\-\/&éèêëàâùûüôîïœç]/gi,' ').replace(/\s+/g,' ').trim().slice(0,60);
+    if(label.length<2) continue;
+    const date=normalizeDate(dateMatch[0]);
+    rows.push({date, label, amount, categorie:guessCategory(label), skip:false, editLabel:label, editAmount:Math.abs(amount), isDebit:amount<0});
+  }
   return rows;
 }
 
 function guessCategory(label){
-  const l = label.toLowerCase();
-  if(/carrefour|leclerc|aldi|lidl|monoprix|intermarche|casino|franprix|super|marche|epicerie|boulanger|boucherie/.test(l)) return 'Alimentation';
-  if(/restaurant|mc donalds|mcdonald|burger|sushi|pizza|kebab|uber eat|deliveroo|just eat|brasserie|cafe|bar|fnac/.test(l)) return 'Sorties / loisirs';
-  if(/amazon|zara|h&m|fnac|shein|vinted|aliexpress|cdiscount|galerie|shopping|boutique/.test(l)) return 'Shopping';
-  if(/uber|taxi|sncf|ratp|transilien|blablacar|autoroute|parking|essence|total|bp|shell|carburant/.test(l)) return 'Transport';
-  if(/pharmacie|medecin|docteur|hopital|clinique|dentiste|mutuelle|sante|opticien/.test(l)) return 'Sante';
-  if(/loyer|edf|engie|eau|internet|sfr|orange|bouygue|free|assurance|chauffage/.test(l)) return 'Maison';
-  if(/netflix|spotify|disney|prime|youtube|apple|google|abonnement|mensuel/.test(l)) return 'Abonnements';
+  const l=(label||'').toLowerCase();
+  if(/carrefour|leclerc|aldi|lidl|monoprix|intermarche|casino|franprix|super u|biocoop|picard|naturalia|boulangerie|boucherie|marche|epicerie/.test(l)) return 'Alimentation';
+  if(/restaurant|mcdo|mcdonald|burger|kfc|quick|sushi|pizza|kebab|uber eat|deliveroo|just eat|brasserie|cafe|snack|traiteur|patisserie|glacier/.test(l)) return 'Sorties / loisirs';
+  if(/cinema|theatre|concert|musee|sport|gym|piscine|steam|playstation|xbox|nintendo|fnac|cultura|loisir/.test(l)) return 'Sorties / loisirs';
+  if(/amazon|ebay|zara|h&m|shein|vinted|aliexpress|cdiscount|galeries|primark|kiabi|decathlon|ikea|leroy|bricoman|boutique/.test(l)) return 'Shopping';
+  if(/uber|taxi|sncf|ratp|transilien|ter |blablacar|autoroute|vinci|sanef|parking|peage|essence|total|bp|shell|esso|carburant/.test(l)) return 'Transport';
+  if(/pharmacie|medecin|docteur|hopital|clinique|dentiste|kine|optique|opticien|sante|mutuelle|maternite/.test(l)) return 'Sante';
+  if(/loyer|edf|engie|eau |internet|sfr|orange|bouygues|free|assurance|allianz|axa|maif|credit|caution/.test(l)) return 'Maison';
+  if(/netflix|spotify|disney|prime|youtube|apple|google|deezer|canal|abonnement|mensuel|souscription/.test(l)) return 'Abonnements';
   return 'Autre';
 }
 
-function renderImportPreview(rows){
-  const preview = document.getElementById('import-preview');
-  const debits = rows.filter(r=>r.amount<0);
-  const credits = rows.filter(r=>r.amount>=0);
-
-  preview.innerHTML = `
-    <div style="display:flex;gap:8px;margin-bottom:12px;font-size:13px;">
+function renderImportPreview(){
+  const preview=document.getElementById('import-preview');
+  const active=importRows.filter(r=>!r.skip);
+  const debits=active.filter(r=>r.isDebit);
+  const credits=active.filter(r=>!r.isDebit);
+  preview.innerHTML=`
+    <div style="display:flex;gap:8px;margin:12px 0;font-size:13px;">
       <div style="flex:1;background:var(--red-bg);border-radius:8px;padding:10px;text-align:center;">
         <div style="font-weight:700;color:var(--red);">${debits.length} depenses</div>
-        <div style="color:var(--ink2);">${fmt(Math.abs(debits.reduce((s,r)=>s+r.amount,0)))}</div>
+        <div style="color:var(--ink2);">${fmt(debits.reduce((s,r)=>s+r.editAmount,0))}</div>
       </div>
       <div style="flex:1;background:var(--green-bg);border-radius:8px;padding:10px;text-align:center;">
         <div style="font-weight:700;color:var(--green);">${credits.length} recettes</div>
-        <div style="color:var(--ink2);">${fmt(credits.reduce((s,r)=>s+r.amount,0))}</div>
+        <div style="color:var(--ink2);">${fmt(credits.reduce((s,r)=>s+r.editAmount,0))}</div>
       </div>
     </div>
-    <p style="font-size:12px;color:var(--ink2);margin-bottom:8px;">Verifie les transactions et clique sur une ligne pour la desactiver. Change la categorie si besoin.</p>
-    <div style="overflow-x:auto;">
-      <table class="import-table">
-        <thead><tr><th>Date</th><th>Libelle</th><th>Montant</th><th>Categorie</th></tr></thead>
-        <tbody id="import-tbody">
-          ${rows.map((r,i)=>`
-            <tr class="${r.skip?'skip':''}" onclick="toggleImportRow(${i})" style="cursor:pointer;">
-              <td style="white-space:nowrap;color:var(--ink2);">${r.date}</td>
-              <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.label}</td>
-              <td><span class="tag ${r.amount<0?'debit':'credit'}">${r.amount>=0?'+':''}${fmt(r.amount)}</span></td>
-              <td onclick="event.stopPropagation()">
-                <select onchange="importRows[${i}].categorie=this.value" style="border:0.5px solid var(--line);border-radius:4px;padding:2px 4px;font-size:11px;background:var(--bg);color:var(--ink);">
-                  ${CATEGORIES.map(c=>`<option value="${c}" ${r.categorie===c?'selected':''}>${c}</option>`).join('')}
-                  <option value="" ${!r.categorie?'selected':''}>Sans categorie</option>
-                </select>
-              </td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
+    <p style="font-size:12px;color:var(--ink2);margin:0 0 10px;">Clique <b>Skip</b> pour ignorer une ligne. Tu peux modifier le libelle, montant et categorie de chaque transaction.</p>
+    <div id="import-rows-container">${importRows.map((r,i)=>renderImportRow(r,i)).join('')}</div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="import-btn" id="import-confirm-btn" onclick="confirmImport()" style="flex:2;">Importer ${active.length} transactions</button>
+      <button onclick="importRows.forEach(r=>r.skip=false);renderImportPreview();" style="flex:1;background:var(--bg);color:var(--ink2);border:0.5px solid var(--line);border-radius:10px;padding:12px;font-size:13px;cursor:pointer;">Tout selectionner</button>
+    </div>`;
+}
+
+function renderImportRow(r,i){
+  return `<div id="irow-${i}" style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;background:${r.skip?'var(--line)':'var(--bg)'};border-radius:10px;margin-bottom:6px;opacity:${r.skip?0.4:1};">
+    <div style="display:flex;gap:6px;align-items:center;">
+      <span style="font-size:10px;color:var(--ink3);flex-shrink:0;min-width:52px;">${r.date}</span>
+      <input type="text" value="${(r.editLabel||'').replace(/"/g,'&quot;')}"
+        oninput="importRows[${i}].editLabel=this.value"
+        style="flex:1;min-width:0;border:0.5px solid var(--line);border-radius:6px;padding:5px 7px;font-size:12.5px;background:var(--card);color:var(--ink);">
+      <span class="tag ${r.isDebit?'debit':'credit'}" style="flex-shrink:0;cursor:pointer;user-select:none;" onclick="toggleImportType(${i})" title="Cliquer pour changer">${r.isDebit?'-':'+'}</span>
+      <input type="number" step="0.01" value="${r.editAmount}"
+        oninput="importRows[${i}].editAmount=parseFloat(this.value)||0;refreshImportSummary();"
+        style="width:75px;flex-shrink:0;border:0.5px solid var(--line);border-radius:6px;padding:5px 6px;font-size:12.5px;text-align:right;background:var(--card);color:${r.isDebit?'var(--red)':'var(--green)'};">
+      <button onclick="toggleImportRow(${i})" style="flex-shrink:0;background:${r.skip?'var(--green-bg)':'var(--red-bg)'};color:${r.skip?'var(--green)':'var(--red)'};border:none;border-radius:6px;padding:5px 8px;cursor:pointer;font-size:12px;font-weight:600;">${r.skip?'OK':'Skip'}</button>
     </div>
-    <button class="import-btn" onclick="confirmImport()">Importer les transactions selectionnees</button>
-  `;
+    <div style="display:flex;gap:6px;align-items:center;padding-left:58px;">
+      <select onchange="importRows[${i}].categorie=this.value" style="flex:1;border:0.5px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px;background:var(--card);color:var(--ink2);">
+        ${CATEGORIES.map(c=>`<option value="${c}" ${r.categorie===c?'selected':''}>${c}</option>`).join('')}
+        <option value="" ${!r.categorie?'selected':''}>Sans categorie</option>
+      </select>
+      <span style="font-size:11px;color:var(--ink3);flex-shrink:0;">${r.isDebit?'CB':'Recettes'}</span>
+    </div>
+  </div>`;
 }
 
 function toggleImportRow(i){
-  importRows[i].skip = !importRows[i].skip;
-  const rows = document.querySelectorAll('#import-tbody tr');
-  if(rows[i]) rows[i].className = importRows[i].skip ? 'skip' : '';
+  importRows[i].skip=!importRows[i].skip;
+  const el=document.getElementById('irow-'+i);
+  if(el){ el.style.opacity=importRows[i].skip?'0.4':'1'; el.style.background=importRows[i].skip?'var(--line)':'var(--bg)'; }
+  const btn=el?el.querySelector('button'):null;
+  if(btn){ btn.textContent=importRows[i].skip?'OK':'Skip'; btn.style.background=importRows[i].skip?'var(--green-bg)':'var(--red-bg)'; btn.style.color=importRows[i].skip?'var(--green)':'var(--red)'; }
+  refreshImportSummary();
+}
+
+function toggleImportType(i){
+  importRows[i].isDebit=!importRows[i].isDebit;
+  const el=document.getElementById('irow-'+i);
+  const span=el?el.querySelector('.tag'):null;
+  if(span){ span.textContent=importRows[i].isDebit?'-':'+'; span.className='tag '+(importRows[i].isDebit?'debit':'credit'); }
+}
+
+function refreshImportSummary(){
+  const active=importRows.filter(r=>!r.skip);
+  const btn=document.getElementById('import-confirm-btn');
+  if(btn) btn.textContent=`Importer ${active.length} transactions`;
 }
 
 function confirmImport(){
-  const toImport = importRows.filter(r=>!r.skip);
-  const debits = toImport.filter(r=>r.amount<0);
-  const credits = toImport.filter(r=>r.amount>=0);
-
-  // Add debits to CB
-  debits.forEach(r=>{
-    months[currentKey].cb.push({
-      label: r.label.slice(0,40),
-      montant: Math.abs(r.amount),
-      categorie: r.categorie||'Autre',
-      note: r.date
-    });
+  importRows.filter(r=>!r.skip).forEach(r=>{
+    if(r.isDebit) months[currentKey].cb.push({label:r.editLabel.slice(0,50), montant:r.editAmount, categorie:r.categorie||'Autre', note:r.date});
+    else months[currentKey].revenus.push({label:r.editLabel.slice(0,50), montant:r.editAmount});
   });
-
-  // Add credits to revenus
-  credits.forEach(r=>{
-    months[currentKey].revenus.push({
-      label: r.label.slice(0,40),
-      montant: r.amount
-    });
-  });
-
   save();
   document.getElementById('import-modal').remove();
   render();
 }
+
 
 function setGoal(){
   const val=parseFloat(document.getElementById('goal-input').value)||0;
