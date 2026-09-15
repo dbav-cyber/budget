@@ -162,7 +162,7 @@ const db   = firebase.firestore();
 // ── État ──────────────────────────────────────────────────────
 let months={}, currentKey=null, currentUser=null;
 let activeTab='budget', darkMode=false;
-let savingsGoal=0, assets=[], budgetTargets={}, labelColors={}, copiedMonth=null, passifs=[];
+let savingsGoal=0, assets=[], budgetTargets={}, labelColors={}, copiedMonth=null, passifs=[], copiedSection=null, copiedSectionName=null;
 let charts={};
 
 // ── Constantes ────────────────────────────────────────────────
@@ -395,23 +395,19 @@ function nav(){ return `<nav class="bottom-nav">
   <button class="nav-btn ${activeTab==='analyse'?'active':''}" onclick="switchTab('analyse')"><span class="icon">&#128200;</span>Analyse</button>
 </nav>`; }
 
-function copyMonth(){
-  copiedMonth = JSON.parse(JSON.stringify(months[currentKey]));
-  const btn = document.getElementById('paste-btn');
-  if(btn){ btn.disabled=false; btn.style.opacity='1'; }
-  // Flash feedback
-  const copyBtn = document.getElementById('copy-btn');
-  if(copyBtn){ copyBtn.textContent='Copie !'; setTimeout(()=>{ copyBtn.textContent='Copier'; },1500); }
+function copySection(section, label){
+  copiedSection = JSON.parse(JSON.stringify(months[currentKey][section]));
+  copiedSectionName = section;
+  const btn = document.getElementById('paste-btn-'+section);
+  if(btn){ btn.style.display='inline-block'; }
+  const copyBtn = document.getElementById('copy-btn-'+section);
+  if(copyBtn){ copyBtn.textContent='Copie !'; setTimeout(()=>{ if(copyBtn) copyBtn.textContent='Copier'; },1500); }
 }
 
-function pasteMonth(){
-  if(!copiedMonth) return;
-  if(!confirm('Coller les donnees copiees dans ce mois ? Les donnees actuelles seront remplacees.')) return;
-  const soldeDebut = months[currentKey].soldeDebut;
-  const miseDeCote = months[currentKey].miseDeCotePrecedente;
-  months[currentKey] = JSON.parse(JSON.stringify(copiedMonth));
-  months[currentKey].soldeDebut = soldeDebut;
-  months[currentKey].miseDeCotePrecedente = miseDeCote;
+function pasteSection(section){
+  if(!copiedSection) return;
+  if(!confirm('Coller les lignes copiees dans cette section ?')) return;
+  months[currentKey][section] = JSON.parse(JSON.stringify(copiedSection));
   save(); render();
 }
 
@@ -549,8 +545,7 @@ function renderBudget(){
       <div class="topbar">
         <select onchange="changeMonth(this.value)">${keys.map(k=>`<option value="${k}" ${k===currentKey?'selected':''}>${monthLabel(k)}</option>`).join('')}</select>
         <button onclick="addNewMonth()">+ Mois suivant</button>
-        <button id="copy-btn" onclick="copyMonth()" title="Copier ce mois" style="background:var(--blue-bg);color:var(--blue);border-color:var(--blue-line);">Copier</button>
-        <button id="paste-btn" onclick="pasteMonth()" title="Coller dans ce mois" style="background:var(--amber-bg);color:var(--amber);border-color:var(--amber-line);opacity:${copiedMonth?'1':'0.4'};" ${copiedMonth?'':'disabled'}>Coller</button>
+
         <span class="save-status" id="save-status"></span>
       </div>
 
@@ -577,7 +572,12 @@ function renderBudget(){
 
       <!-- RECETTES -->
       <section>
-        <h2>Recettes <span class="pill green">${fmt(t.totalRevenusBrut)}</span></h2>
+        <h2>Recettes <span class="pill green">${fmt(t.totalRevenusBrut)}</span>
+          <span style="margin-left:auto;display:flex;gap:6px;">
+            <button id="copy-btn-revenus" onclick="copySection('revenus')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--blue-line);background:var(--blue-bg);color:var(--blue);border-radius:6px;cursor:pointer;">Copier</button>
+            <button id="paste-btn-revenus" onclick="pasteSection('revenus')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--amber-line);background:var(--amber-bg);color:var(--amber);border-radius:6px;cursor:pointer;display:${copiedSectionName==='revenus'?'inline-block':'none'}">Coller</button>
+          </span>
+        </h2>
         <div class="row">
           <input type="text" disabled value="Solde de debut de mois" style="color:var(--ink2)">
           <input type="number" step="0.01" value="${d.soldeDebut}" oninput="updateSoldeDebut(this.value)" onblur="render()">
@@ -589,8 +589,12 @@ function renderBudget(){
 
       <!-- CHARGES FIXES -->
       <section>
-        <h2>Charges fixes <span class="pill amber">${fmt(t.totalFixes)}</span>
+        <h2 style="flex-wrap:wrap;gap:6px;">Charges fixes <span class="pill amber">${fmt(t.totalFixes)}</span>
           <span style="font-size:11px;color:var(--ink3);font-weight:400;">Budget : <input type="number" step="10" value="${budgetTargets.fixes||''}" placeholder="0" oninput="updateTarget('fixes',this.value)" style="width:60px;border:0.5px solid var(--line);border-radius:4px;padding:2px 4px;font-size:11px;background:var(--bg);color:var(--ink);">&#8364;</span>
+          <span style="margin-left:auto;display:flex;gap:6px;">
+            <button id="copy-btn-fixes" onclick="copySection('fixes')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--blue-line);background:var(--blue-bg);color:var(--blue);border-radius:6px;cursor:pointer;">Copier</button>
+            <button id="paste-btn-fixes" onclick="pasteSection('fixes')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--amber-line);background:var(--amber-bg);color:var(--amber);border-radius:6px;cursor:pointer;display:${copiedSectionName==='fixes'?'inline-block':'none'}">Coller</button>
+          </span>
         </h2>
         ${budgetBarHTML('Charges fixes',t.totalFixes,'fixes')}
         <div class="rows">${d.fixes.map((it,i)=>rowHTML('fixes',i,it,false)).join('')}</div>
@@ -599,7 +603,12 @@ function renderBudget(){
 
       <!-- EPARGNE -->
       <section>
-        <h2>Epargne <span class="pill green">${fmt(t.totalEpargne)}</span></h2>
+        <h2>Epargne <span class="pill green">${fmt(t.totalEpargne)}</span>
+          <span style="margin-left:auto;display:flex;gap:6px;">
+            <button id="copy-btn-epargne" onclick="copySection('epargne')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--blue-line);background:var(--blue-bg);color:var(--blue);border-radius:6px;cursor:pointer;">Copier</button>
+            <button id="paste-btn-epargne" onclick="pasteSection('epargne')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--amber-line);background:var(--amber-bg);color:var(--amber);border-radius:6px;cursor:pointer;display:${copiedSectionName==='epargne'?'inline-block':'none'}">Coller</button>
+          </span>
+        </h2>
         <div class="rows">${d.epargne.map((it,i)=>rowHTML('epargne',i,it,false)).join('')}</div>
         <button class="addrow" onclick="addRow('epargne')">+ Ajouter une ligne epargne</button>
         <p class="savings-note">Solde epargne cumule : <strong>${fmt(t.miseDeCoteTotal)}</strong></p>
@@ -612,8 +621,12 @@ function renderBudget(){
 
       <!-- CB -->
       <section>
-        <h2>Depenses CB <span class="pill red">${fmt(t.totalCB)}</span>
+        <h2 style="flex-wrap:wrap;gap:6px;">Depenses CB <span class="pill red">${fmt(t.totalCB)}</span>
           <span style="font-size:11px;color:var(--ink3);font-weight:400;">Budget : <input type="number" step="10" value="${budgetTargets.cb||''}" placeholder="0" oninput="updateTarget('cb',this.value)" style="width:60px;border:0.5px solid var(--line);border-radius:4px;padding:2px 4px;font-size:11px;background:var(--bg);color:var(--ink);">&#8364;</span>
+          <span style="margin-left:auto;display:flex;gap:6px;">
+            <button id="copy-btn-cb" onclick="copySection('cb')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--blue-line);background:var(--blue-bg);color:var(--blue);border-radius:6px;cursor:pointer;">Copier</button>
+            <button id="paste-btn-cb" onclick="pasteSection('cb')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--amber-line);background:var(--amber-bg);color:var(--amber);border-radius:6px;cursor:pointer;display:${copiedSectionName==='cb'?'inline-block':'none'}">Coller</button>
+          </span>
         </h2>
         ${budgetBarHTML('Depenses CB',t.totalCB,'cb')}
         <div class="rows">${d.cb.map((it,i)=>rowHTML('cb',i,it,true)).join('')}</div>
@@ -627,8 +640,12 @@ function renderBudget(){
 
       <!-- AUTRES -->
       <section>
-        <h2>Autres depenses <span class="pill red">${fmt(t.totalAutresVar)}</span>
+        <h2 style="flex-wrap:wrap;gap:6px;">Autres depenses <span class="pill red">${fmt(t.totalAutresVar)}</span>
           <span style="font-size:11px;color:var(--ink3);font-weight:400;">Budget : <input type="number" step="10" value="${budgetTargets.autres||''}" placeholder="0" oninput="updateTarget('autres',this.value)" style="width:60px;border:0.5px solid var(--line);border-radius:4px;padding:2px 4px;font-size:11px;background:var(--bg);color:var(--ink);">&#8364;</span>
+          <span style="margin-left:auto;display:flex;gap:6px;">
+            <button id="copy-btn-autresVariables" onclick="copySection('autresVariables')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--blue-line);background:var(--blue-bg);color:var(--blue);border-radius:6px;cursor:pointer;">Copier</button>
+            <button id="paste-btn-autresVariables" onclick="pasteSection('autresVariables')" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--amber-line);background:var(--amber-bg);color:var(--amber);border-radius:6px;cursor:pointer;display:${copiedSectionName==='autresVariables'?'inline-block':'none'}">Coller</button>
+          </span>
         </h2>
         ${budgetBarHTML('Autres depenses',t.totalAutresVar,'autres')}
         <div class="rows">${d.autresVariables.map((it,i)=>rowHTML('autresVariables',i,it,false)).join('')}</div>
