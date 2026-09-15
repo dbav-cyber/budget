@@ -37,6 +37,23 @@ body{margin:0;background:var(--bg);color:var(--ink);padding:20px 12px 90px;}
 .wrap{max-width:760px;margin:0 auto;}
 h1{font-size:22px;font-weight:600;margin:0 0 4px;}
 .sub{color:var(--ink2);font-size:14px;margin:0 0 20px;}
+/* Import modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:flex-end;justify-content:center;}
+.modal{background:var(--card);border-radius:20px 20px 0 0;width:100%;max-width:760px;max-height:90vh;overflow-y:auto;padding:20px 18px 40px;}
+.modal h2{font-size:17px;font-weight:700;margin:0 0 16px;display:flex;justify-content:space-between;align-items:center;}
+.modal-close{background:none;border:none;font-size:22px;cursor:pointer;color:var(--ink3);}
+.import-drop{border:2px dashed var(--line-strong);border-radius:12px;padding:32px;text-align:center;cursor:pointer;background:var(--bg);margin-bottom:16px;transition:border-color 0.2s;}
+.import-drop:hover,.import-drop.drag{border-color:var(--green);}
+.import-drop .icon{font-size:40px;margin-bottom:8px;}
+.import-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:12px;}
+.import-table th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);color:var(--ink2);font-weight:600;}
+.import-table td{padding:6px 8px;border-bottom:0.5px solid var(--line);}
+.import-table tr.skip td{opacity:0.4;text-decoration:line-through;}
+.import-table select{border:0.5px solid var(--line);border-radius:4px;padding:3px 4px;font-size:11px;background:var(--bg);color:var(--ink);}
+.tag{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;}
+.tag.debit{background:var(--red-bg);color:var(--red);}
+.tag.credit{background:var(--green-bg);color:var(--green);}
+.import-btn{background:var(--green);color:#fff;border:none;border-radius:10px;padding:12px 20px;font-size:14px;font-weight:600;cursor:pointer;width:100%;margin-top:8px;}
 /* Nav */
 .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:0.5px solid var(--line);display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom,0px);}
 .nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 4px 8px;background:none;border:none;cursor:pointer;font-size:10px;color:var(--ink3);gap:3px;}
@@ -145,6 +162,7 @@ section h2{font-size:15px;font-weight:600;margin:0 0 10px;display:flex;align-ite
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <script>
 // ── Firebase ──────────────────────────────────────────────────
 const firebaseConfig = {
@@ -545,7 +563,7 @@ function renderBudget(){
       <div class="topbar">
         <select onchange="changeMonth(this.value)">${keys.map(k=>`<option value="${k}" ${k===currentKey?'selected':''}>${monthLabel(k)}</option>`).join('')}</select>
         <button onclick="addNewMonth()">+ Mois suivant</button>
-
+        <button onclick="openImport()" style="background:var(--blue-bg);color:var(--blue);border-color:var(--blue-line);">&#128196; Importer</button>
         <span class="save-status" id="save-status"></span>
       </div>
 
@@ -1158,6 +1176,217 @@ function renderAnalyse(){
       tension:0.3,pointRadius:3,borderWidth:2
     }))
   },options:{plugins:{legend:{position:'bottom',labels:{color:darkMode?'#e8e6e0':'#23211c'}}},scales:{y:{beginAtZero:true,ticks:{color:darkMode?'#9a97a8':'#6b6657'}},x:{ticks:{color:darkMode?'#9a97a8':'#6b6657'}}}}});
+}
+
+
+// ── IMPORT RELEVE BANCAIRE ────────────────────────────────────
+let importRows = [];
+
+function openImport(){
+  // Remove existing modal if any
+  const existing = document.getElementById('import-modal');
+  if(existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.id = 'import-modal';
+  modal.innerHTML = `
+    <div class="modal">
+      <h2>Importer un releve <button class="modal-close" onclick="document.getElementById('import-modal').remove()">x</button></h2>
+      <div class="import-drop" id="drop-zone" onclick="document.getElementById('file-input-import').click()">
+        <div class="icon">&#128196;</div>
+        <div style="font-weight:600;margin-bottom:4px;">Glisse ton releve ici</div>
+        <div style="font-size:13px;color:var(--ink2);">CSV ou PDF acceptes</div>
+        <input type="file" id="file-input-import" accept=".csv,.pdf,.txt" style="display:none" onchange="handleImportFile(this.files[0])">
+      </div>
+      <div id="import-preview"></div>
+    </div>`;
+
+  // Drag and drop
+  modal.addEventListener('dragover', e=>{ e.preventDefault(); document.getElementById('drop-zone').classList.add('drag'); });
+  modal.addEventListener('dragleave', ()=>{ document.getElementById('drop-zone').classList.remove('drag'); });
+  modal.addEventListener('drop', e=>{ e.preventDefault(); document.getElementById('drop-zone').classList.remove('drag'); handleImportFile(e.dataTransfer.files[0]); });
+  modal.addEventListener('click', e=>{ if(e.target===modal) modal.remove(); });
+
+  document.body.appendChild(modal);
+}
+
+async function handleImportFile(file){
+  if(!file) return;
+  const preview = document.getElementById('import-preview');
+  preview.innerHTML = '<p style="color:var(--ink2);text-align:center;">Analyse en cours...</p>';
+
+  try{
+    let rows = [];
+    if(file.name.toLowerCase().endsWith('.pdf')){
+      rows = await parsePDF(file);
+    } else {
+      const text = await file.text();
+      rows = parseCSV(text);
+    }
+
+    if(!rows.length){ preview.innerHTML = '<p style="color:var(--red);">Aucune transaction detectee. Verifie le format du fichier.</p>'; return; }
+
+    importRows = rows;
+    renderImportPreview(rows);
+  } catch(e){
+    preview.innerHTML = `<p style="color:var(--red);">Erreur : ${e.message}</p>`;
+  }
+}
+
+function parseCSV(text){
+  const lines = text.split(/\r?\n/).filter(l=>l.trim());
+  if(lines.length < 2) return [];
+
+  // Detect separator
+  const sep = lines[0].includes(';') ? ';' : ',';
+  const headers = lines[0].split(sep).map(h=>h.replace(/^"|"$/g,'').trim().toLowerCase());
+
+  // Try to detect columns
+  const dateIdx = headers.findIndex(h=>h.includes('date'));
+  const labelIdx = headers.findIndex(h=>['libelle','label','description','intitule','operation','reference','detail','wording'].some(k=>h.includes(k)));
+  const amountIdx = headers.findIndex(h=>['montant','amount','valeur','debit','credit','somme'].some(k=>h.includes(k)));
+  const debitIdx = headers.findIndex(h=>h.includes('debit') || h.includes('sortie'));
+  const creditIdx = headers.findIndex(h=>h.includes('credit') || h.includes('entree'));
+
+  const rows = [];
+  for(let i=1; i<lines.length; i++){
+    const cols = lines[i].split(sep).map(c=>c.replace(/^"|"$/g,'').trim());
+    if(cols.length < 2) continue;
+
+    let date = dateIdx>=0 ? cols[dateIdx] : '';
+    let label = labelIdx>=0 ? cols[labelIdx] : cols[1]||'';
+    let amount = 0;
+
+    if(amountIdx>=0){
+      amount = parseFloat((cols[amountIdx]||'0').replace(',','.').replace(/[^0-9.-]/g,''));
+    } else if(debitIdx>=0 || creditIdx>=0){
+      const debit = parseFloat((cols[debitIdx]||'0').replace(',','.').replace(/[^0-9.-]/g,''))||0;
+      const credit = parseFloat((cols[creditIdx]||'0').replace(',','.').replace(/[^0-9.-]/g,''))||0;
+      amount = credit - debit;
+    }
+
+    if(!label && !amount) continue;
+    const cat = guessCategory(label);
+    rows.push({date, label, amount, categorie:cat, skip:false});
+  }
+  return rows;
+}
+
+async function parsePDF(file){
+  if(typeof pdfjsLib === 'undefined') throw new Error('PDF.js non charge. Verifie ta connexion.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+  let fullText = '';
+  for(let i=1; i<=pdf.numPages; i++){
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    fullText += tc.items.map(item=>item.str).join(' ') + '\n';
+  }
+  // Try to extract lines with amounts
+  const rows = [];
+  const amountRegex = /(-?\d{1,3}(?:[\s.,]\d{3})*(?:[.,]\d{2})?)\s*EUR?/gi;
+  const dateRegex = /\b(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\b/;
+  const lines2 = fullText.split('\n');
+  lines2.forEach(line=>{
+    const dateMatch = line.match(dateRegex);
+    const amtMatches = [...line.matchAll(amountRegex)];
+    if(dateMatch && amtMatches.length){
+      const amount = parseFloat(amtMatches[0][1].replace(/[\s]/g,'').replace(',','.'));
+      const label = line.replace(dateRegex,'').replace(amountRegex,'').trim().slice(0,60);
+      if(label && !isNaN(amount)){
+        rows.push({date:dateMatch[0], label, amount, categorie:guessCategory(label), skip:false});
+      }
+    }
+  });
+  return rows;
+}
+
+function guessCategory(label){
+  const l = label.toLowerCase();
+  if(/carrefour|leclerc|aldi|lidl|monoprix|intermarche|casino|franprix|super|marche|epicerie|boulanger|boucherie/.test(l)) return 'Alimentation';
+  if(/restaurant|mc donalds|mcdonald|burger|sushi|pizza|kebab|uber eat|deliveroo|just eat|brasserie|cafe|bar|fnac/.test(l)) return 'Sorties / loisirs';
+  if(/amazon|zara|h&m|fnac|shein|vinted|aliexpress|cdiscount|galerie|shopping|boutique/.test(l)) return 'Shopping';
+  if(/uber|taxi|sncf|ratp|transilien|blablacar|autoroute|parking|essence|total|bp|shell|carburant/.test(l)) return 'Transport';
+  if(/pharmacie|medecin|docteur|hopital|clinique|dentiste|mutuelle|sante|opticien/.test(l)) return 'Sante';
+  if(/loyer|edf|engie|eau|internet|sfr|orange|bouygue|free|assurance|chauffage/.test(l)) return 'Maison';
+  if(/netflix|spotify|disney|prime|youtube|apple|google|abonnement|mensuel/.test(l)) return 'Abonnements';
+  return 'Autre';
+}
+
+function renderImportPreview(rows){
+  const preview = document.getElementById('import-preview');
+  const debits = rows.filter(r=>r.amount<0);
+  const credits = rows.filter(r=>r.amount>=0);
+
+  preview.innerHTML = `
+    <div style="display:flex;gap:8px;margin-bottom:12px;font-size:13px;">
+      <div style="flex:1;background:var(--red-bg);border-radius:8px;padding:10px;text-align:center;">
+        <div style="font-weight:700;color:var(--red);">${debits.length} depenses</div>
+        <div style="color:var(--ink2);">${fmt(Math.abs(debits.reduce((s,r)=>s+r.amount,0)))}</div>
+      </div>
+      <div style="flex:1;background:var(--green-bg);border-radius:8px;padding:10px;text-align:center;">
+        <div style="font-weight:700;color:var(--green);">${credits.length} recettes</div>
+        <div style="color:var(--ink2);">${fmt(credits.reduce((s,r)=>s+r.amount,0))}</div>
+      </div>
+    </div>
+    <p style="font-size:12px;color:var(--ink2);margin-bottom:8px;">Verifie les transactions et clique sur une ligne pour la desactiver. Change la categorie si besoin.</p>
+    <div style="overflow-x:auto;">
+      <table class="import-table">
+        <thead><tr><th>Date</th><th>Libelle</th><th>Montant</th><th>Categorie</th></tr></thead>
+        <tbody id="import-tbody">
+          ${rows.map((r,i)=>`
+            <tr class="${r.skip?'skip':''}" onclick="toggleImportRow(${i})" style="cursor:pointer;">
+              <td style="white-space:nowrap;color:var(--ink2);">${r.date}</td>
+              <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.label}</td>
+              <td><span class="tag ${r.amount<0?'debit':'credit'}">${r.amount>=0?'+':''}${fmt(r.amount)}</span></td>
+              <td onclick="event.stopPropagation()">
+                <select onchange="importRows[${i}].categorie=this.value" style="border:0.5px solid var(--line);border-radius:4px;padding:2px 4px;font-size:11px;background:var(--bg);color:var(--ink);">
+                  ${CATEGORIES.map(c=>`<option value="${c}" ${r.categorie===c?'selected':''}>${c}</option>`).join('')}
+                  <option value="" ${!r.categorie?'selected':''}>Sans categorie</option>
+                </select>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <button class="import-btn" onclick="confirmImport()">Importer les transactions selectionnees</button>
+  `;
+}
+
+function toggleImportRow(i){
+  importRows[i].skip = !importRows[i].skip;
+  const rows = document.querySelectorAll('#import-tbody tr');
+  if(rows[i]) rows[i].className = importRows[i].skip ? 'skip' : '';
+}
+
+function confirmImport(){
+  const toImport = importRows.filter(r=>!r.skip);
+  const debits = toImport.filter(r=>r.amount<0);
+  const credits = toImport.filter(r=>r.amount>=0);
+
+  // Add debits to CB
+  debits.forEach(r=>{
+    months[currentKey].cb.push({
+      label: r.label.slice(0,40),
+      montant: Math.abs(r.amount),
+      categorie: r.categorie||'Autre',
+      note: r.date
+    });
+  });
+
+  // Add credits to revenus
+  credits.forEach(r=>{
+    months[currentKey].revenus.push({
+      label: r.label.slice(0,40),
+      montant: r.amount
+    });
+  });
+
+  save();
+  document.getElementById('import-modal').remove();
+  render();
 }
 
 function setGoal(){
