@@ -392,7 +392,6 @@ function addNewMonth(){
 
 function nav(){ return `<nav class="bottom-nav">
   <button class="nav-btn ${activeTab==='budget'?'active':''}" onclick="switchTab('budget')"><span class="icon">&#128176;</span>Budget</button>
-  <button class="nav-btn ${activeTab==='graphs'?'active':''}" onclick="switchTab('graphs')"><span class="icon">&#128202;</span>Graphiques</button>
   <button class="nav-btn ${activeTab==='analyse'?'active':''}" onclick="switchTab('analyse')"><span class="icon">&#128200;</span>Analyse</button>
 </nav>`; }
 
@@ -418,7 +417,6 @@ function pasteMonth(){
 
 function render(){
   if(activeTab==='budget') renderBudget();
-  else if(activeTab==='graphs') renderGraphs();
   else renderAnalyse();
 }
 
@@ -446,7 +444,7 @@ function rowHTML(section,idx,item,withCat){
       <input type="number" step="0.01" value="${item.montant||0}"
         oninput="updateField('${section}',${idx},'montant',this.value)" onblur="render()">
       <button class="note-btn ${hasNote?'has-note':''}" onclick="toggleNote('${noteId}')" title="${hasNote?item.note:'Ajouter une note'}">&#128221;</button>
-      <button class="copy-btn" onclick="copyRow('${(item.label||'').replace(/'/g,'').replace(/"/g,'')}',${item.montant||0},this)">&#10696;</button>
+
       <button class="del" onclick="deleteRow('${section}',${idx})">x</button>
     </div>
     <div id="${noteId}" style="display:${hasNote?'block':'none'};">
