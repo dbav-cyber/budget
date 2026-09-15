@@ -1271,20 +1271,44 @@ function parseCSV(text){
     label = label.replace(/^["']|["']$/g,'').trim();
     if(!label || label === lines[headerLine].split(sep)[iLabel]) continue;
     let amount = 0;
-    if(iAmount>=0 && cols[iAmount]){
-      amount = parseMontant(cols[iAmount]);
-    } else if(iDebit>=0 || iCredit>=0){
-      const debit  = iDebit>=0  ? parseMontant(cols[iDebit]||'0')  : 0;
-      const credit = iCredit>=0 ? parseMontant(cols[iCredit]||'0') : 0;
-      amount = credit > 0 ? credit : -Math.abs(debit);
+    let isDebit = true;
+
+    if(iDebit>=0 || iCredit>=0){
+      // Colonnes debit et credit separees (LCL, CIC, CA, BNP...)
+      const debitStr  = iDebit>=0  ? (cols[iDebit]||'').replace(/\s/g,'')  : '';
+      const creditStr = iCredit>=0 ? (cols[iCredit]||'').replace(/\s/g,'') : '';
+      const debit  = debitStr  && debitStr!==''  ? parseMontant(debitStr)  : 0;
+      const credit = creditStr && creditStr!=='' ? parseMontant(creditStr) : 0;
+      if(credit > 0 && debit === 0){
+        amount = credit; isDebit = false; // Entree (salaire, remboursement...)
+      } else if(debit > 0 && credit === 0){
+        amount = debit;  isDebit = true;  // Sortie (achat, prelevement...)
+      } else if(credit > 0){
+        amount = credit; isDebit = false;
+      } else {
+        amount = debit;  isDebit = true;
+      }
+    } else if(iAmount>=0 && cols[iAmount]){
+      // Colonne montant unique (BoursoBank, Revolut...)
+      // Negatif = sortie, positif = entree
+      const raw = parseMontant(cols[iAmount]);
+      if(raw < 0){ amount = Math.abs(raw); isDebit = true; }
+      else        { amount = raw;          isDebit = false; }
     } else {
+      // Fallback: cherche un nombre dans la ligne
       const nums = cols.filter(c=>c.trim() && /^-?[\d\s,.]+$/.test(c.trim()));
-      if(nums.length) amount = parseMontant(nums[nums.length-1]);
+      if(nums.length){
+        const raw = parseMontant(nums[nums.length-1]);
+        if(raw < 0){ amount = Math.abs(raw); isDebit = true; }
+        else        { amount = raw;          isDebit = raw > 0 ? false : true; }
+      }
     }
-    if(amount===0 && !/\d/.test(line)) continue;
+
+    if(amount === 0 && !/\d/.test(line)) continue;
     date = normalizeDate(date);
-    const isDebit = amount <= 0;
-    rows.push({date, label, amount, categorie:guessCategory(label), skip:false, editLabel:label, editAmount:Math.abs(amount), isDebit});
+    // Categorie auto : si entree, mettre "Salaire" ou autre
+    const cat = isDebit ? guessCategory(label) : guessCreditCategory(label);
+    rows.push({date, label, amount, categorie:cat, skip:false, editLabel:label, editAmount:amount, isDebit});
   }
   return rows;
 }
@@ -1371,6 +1395,14 @@ function guessCategory(label){
   return 'Autre';
 }
 
+function guessCreditCategory(label){
+  const l=(label||'').toLowerCase();
+  if(/salaire|paie|virement|remuneration|mensuel|traitement|net a payer/.test(l)) return 'Salaire';
+  if(/remboursement|rembours|regularisation|avoir|credit/.test(l)) return 'Remboursement';
+  if(/caf|allocation|aide|prime|indemnite|chomage|retraite|pension/.test(l)) return 'Aides / allocations';
+  return 'Autre entree';
+}
+
 function renderImportPreview(){
   const preview=document.getElementById('import-preview');
   const active=importRows.filter(r=>!r.skip);
@@ -1410,7 +1442,7 @@ function renderImportRow(r,i){
     </div>
     <div style="display:flex;gap:6px;align-items:center;padding-left:58px;">
       <select onchange="importRows[${i}].categorie=this.value" style="flex:1;border:0.5px solid var(--line);border-radius:6px;padding:4px 6px;font-size:12px;background:var(--card);color:var(--ink2);">
-        ${CATEGORIES.map(c=>`<option value="${c}" ${r.categorie===c?'selected':''}>${c}</option>`).join('')}
+        ${[...CATEGORIES,'Salaire','Remboursement','Aides / allocations','Autre entree'].map(c=>`<option value="${c}" ${r.categorie===c?'selected':''}>${c}</option>`).join('')}
         <option value="" ${!r.categorie?'selected':''}>Sans categorie</option>
       </select>
       <span style="font-size:11px;color:var(--ink3);flex-shrink:0;">${r.isDebit?'CB':'Recettes'}</span>
