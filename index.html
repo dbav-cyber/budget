@@ -1347,127 +1347,135 @@ function normalizeDate(str){
 }
 
 async function parsePDF(file){
-  if(typeof pdfjsLib==='undefined') throw new Error('PDF.js non charge - verifie ta connexion.');
+  if(typeof pdfjsLib==='undefined') throw new Error('PDF.js non charge.');
   pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
   const buf=await file.arrayBuffer();
   const pdf=await pdfjsLib.getDocument({data:buf}).promise;
 
-  // Extraire tous les items texte avec leurs positions X,Y
+  // Extraire TOUS les items avec position X,Y
   let allItems=[];
   for(let p=1;p<=pdf.numPages;p++){
     const page=await pdf.getPage(p);
     const tc=await page.getTextContent();
     const vp=page.getViewport({scale:1});
-    const pageH=vp.height;
     tc.items.forEach(item=>{
-      const x=Math.round(item.transform[4]);
-      const y=Math.round(pageH-item.transform[5]); // Inverser Y (haut=0)
       const text=(item.str||'').trim();
-      if(text) allItems.push({text,x,y,page:p});
+      if(!text) return;
+      allItems.push({
+        text,
+        x: Math.round(item.transform[4]),
+        y: Math.round(vp.height - item.transform[5])
+      });
     });
   }
 
-  // Grouper par ligne (Y similaire, tolérance 4px)
+  // Trier par Y puis X
   allItems.sort((a,b)=>a.y!==b.y?a.y-b.y:a.x-b.x);
-  const lineGroups=[];
-  let curLine=null;
+
+  // Grouper par lignes (tolérance 8px)
+  const lines=[];
+  let cur=null;
   for(const item of allItems){
-    if(!curLine||Math.abs(item.y-curLine.y)>5){
-      curLine={y:item.y, items:[]};
-      lineGroups.push(curLine);
+    if(!cur||Math.abs(item.y-cur.y)>8){
+      cur={y:item.y,items:[item]};
+      lines.push(cur);
+    } else {
+      cur.items.push(item);
     }
-    curLine.items.push(item);
   }
 
-  // Détecter colonnes Débit/Crédit depuis l'en-tête
-  let xDebit=-1, xCredit=-1;
-  for(const line of lineGroups){
-    const texts=line.items.map(i=>i.text.toLowerCase());
-    const iD=texts.findIndex(t=>t.includes('débit')||t.includes('debit'));
-    const iC=texts.findIndex(t=>t.includes('crédit')||t.includes('credit'));
-    if(iD>=0&&iC>=0){
-      xDebit=line.items[iD].x;
-      xCredit=line.items[iC].x;
-      break;
+  // Détecter positions colonnes depuis l'en-tête "Débit / Crédit"
+  let xDebit=-1, xCredit=-1, xLabel=50;
+  for(const line of lines){
+    for(const item of line.items){
+      const t=item.text.toLowerCase();
+      if(t==='débit'||t==='debit') xDebit=item.x;
+      if(t==='crédit'||t==='credit') xCredit=item.x;
     }
+    if(xDebit>0&&xCredit>0) break;
   }
-  // Fallback si pas d'en-tête trouvé: estimer d'après la largeur
+  // Fallback : estimation si pas trouvé
   if(xDebit<0||xCredit<0){
     const maxX=Math.max(...allItems.map(i=>i.x));
-    xDebit=maxX*0.68; xCredit=maxX*0.82;
+    xDebit=Math.round(maxX*0.70);
+    xCredit=Math.round(maxX*0.85);
   }
-  const colTol=50; // Tolérance colonne en points
+  const TOL=45; // tolérance colonne
 
-  // Construire les transactions
-  const dateRe=/^\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4}$/;
-  const amtRe=/^-?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}$/;
+  const isDate=t=>/^\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}$/.test(t);
+  const isAmt =t=>/^\d{1,3}([ .,]\d{3})*[.,]\d{2}$/.test(t.replace(/\s/g,''));
+  const isSkip=t=>/^(SOLDE|TAEG|TVA|BIC|IBAN|Page|REF|RUM|SDD|Ref|Rif|Policy|Titulaire|Adresse|Service|Boursorama)/i.test(t);
+
+  // Parcourir les lignes et reconstruire les transactions
   const rows=[];
-  let curTx=null;
+  let tx=null;
 
-  for(const line of lineGroups){
-    const firstItem=line.items[0];
-    const lineText=line.items.map(i=>i.text).join(' ');
+  for(const line of lines){
+    // Chercher une date en colonne gauche (x < xDebit-100)
+    const dateItem=line.items.find(i=>isDate(i.text)&&i.x<(xDebit-80));
+    // Chercher montants dans les colonnes débit/crédit
+    const debitItem =line.items.find(i=>isAmt(i.text)&&Math.abs(i.x-xDebit)<TOL);
+    const creditItem=line.items.find(i=>isAmt(i.text)&&Math.abs(i.x-xCredit)<TOL);
 
-    // Nouvelle transaction si la ligne commence par une date
-    if(firstItem && dateRe.test(firstItem.text)){
-      if(curTx&&curTx.label) rows.push(curTx);
-      // Trouver débit/crédit sur cette ligne
-      let debitAmt=0, creditAmt=0;
-      for(const item of line.items){
-        const cleanAmt=item.text.replace(/\s/g,'').replace(',','.');
-        if(!amtRe.test(item.text.replace(',','.'))&&!amtRe.test(cleanAmt)) continue;
-        const val=parseMontant(item.text);
-        if(Math.abs(item.x-xDebit)<colTol) debitAmt=Math.abs(val);
-        else if(Math.abs(item.x-xCredit)<colTol) creditAmt=Math.abs(val);
-      }
-      // Label = tous les items non-date et non-montant sur cette ligne
-      const label=line.items.filter(i=>{
-        if(dateRe.test(i.text)) return false;
-        const cleanAmt=i.text.replace(/\s/g,'').replace(',','.');
-        if(amtRe.test(i.text.replace(',','.'))|| amtRe.test(cleanAmt)) return false;
-        return true;
-      }).map(i=>i.text).join(' ').trim();
+    if(dateItem){
+      // Sauvegarder transaction précédente
+      if(tx&&tx.label&&tx.amount>0) rows.push(tx);
 
-      const isDebit=debitAmt>0;
-      const amount=isDebit?debitAmt:creditAmt;
-      curTx={
-        date:normalizeDate(firstItem.text),
-        label, amount, isDebit,
-        debitAmt, creditAmt,
+      // Construire le libellé : items entre la date et les colonnes montant
+      const label=line.items.filter(i=>
+        !isDate(i.text) &&
+        !isAmt(i.text) &&
+        !isSkip(i.text) &&
+        i.x > xLabel &&
+        i.x < (xDebit-10)
+      ).map(i=>i.text).join(' ').trim().slice(0,60);
+
+      const debit =debitItem  ? parseMontant(debitItem.text)  : 0;
+      const credit=creditItem ? parseMontant(creditItem.text) : 0;
+      const isDebit=debit>0;
+      const amount=debit||credit;
+
+      tx={
+        date: normalizeDate(dateItem.text),
+        label,
+        amount,
+        isDebit,
         categorie: isDebit?guessCategory(label):guessCreditCategory(label),
-        skip:false, editLabel:label, editAmount:amount
+        skip:false,
+        editLabel:label,
+        editAmount:amount
       };
-    } else if(curTx){
-      // Ligne de continuation du libellé
-      // Vérifier si des montants apparaissent sur cette ligne
-      let debitAmt=0, creditAmt=0;
-      for(const item of line.items){
-        const cleanAmt=item.text.replace(/\s/g,'').replace(',','.');
-        if(!amtRe.test(item.text.replace(',','.'))&&!amtRe.test(cleanAmt)) continue;
-        const val=parseMontant(item.text);
-        if(Math.abs(item.x-xDebit)<colTol) debitAmt=Math.abs(val);
-        else if(Math.abs(item.x-xCredit)<colTol) creditAmt=Math.abs(val);
+    } else if(tx){
+      // Ligne de continuation : montant ou libellé supplémentaire
+      const debit =debitItem  ? parseMontant(debitItem.text)  : 0;
+      const credit=creditItem ? parseMontant(creditItem.text) : 0;
+
+      // Si montant trouvé et pas encore de montant
+      if((debit||credit)&&!tx.amount){
+        tx.isDebit=debit>0;
+        tx.amount=debit||credit;
+        tx.editAmount=tx.amount;
+        tx.categorie=tx.isDebit?guessCategory(tx.label):guessCreditCategory(tx.label);
       }
-      if(debitAmt>0||creditAmt>0){
-        // Montants trouvés sur une ligne de continuation
-        if(!curTx.amount){
-          curTx.isDebit=debitAmt>0;
-          curTx.amount=debitAmt||creditAmt;
-          curTx.editAmount=curTx.amount;
-          curTx.categorie=curTx.isDebit?guessCategory(curTx.label):guessCreditCategory(curTx.label);
-        }
-      } else {
-        // Ajouter au libellé si c'est du texte pertinent
-        const addText=line.items.filter(i=>!/^(REF|RUM|SDD|IBAN|BIC|ref|n°)/i.test(i.text)).map(i=>i.text).join(' ').trim();
-        if(addText && curTx.label.length<60) curTx.label=(curTx.label+' '+addText).trim().slice(0,60);
+
+      // Ajouter au libellé si c'est un complément pertinent (pas trop long, pas technique)
+      const extra=line.items.filter(i=>
+        !isDate(i.text)&&!isAmt(i.text)&&!isSkip(i.text)&&
+        i.x>xLabel&&i.x<(xDebit-10)&&i.text.length>1
+      ).map(i=>i.text).join(' ').trim();
+
+      if(extra&&tx.label.length<50&&!isSkip(extra)){
+        // N'ajouter que si c'est un vrai complément (pas des références techniques)
+        if(!/^[A-Z0-9-]{10,}$/.test(extra.replace(/\s/g,'')))
+          tx.label=(tx.label+' '+extra).trim().slice(0,60);
       }
     }
   }
-  if(curTx&&curTx.label&&curTx.amount) rows.push(curTx);
+  if(tx&&tx.label&&tx.amount>0) rows.push(tx);
 
-  // Filtrer les lignes sans montant et les entrées parasites
-  return rows.filter(r=>r.amount>0&&r.label.length>1&&!r.label.match(/^(SOLDE|TAEG|TVA|Montant|Date|Page)/i));
+  return rows.filter(r=>r.amount>0&&r.label.length>1);
 }
+
 
 function guessCategory(label){
   const l=(label||'').toLowerCase();
