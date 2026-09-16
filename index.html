@@ -1275,10 +1275,10 @@ function parseCSV(text){
 
     if(iDebit>=0 || iCredit>=0){
       // Colonnes debit et credit separees (LCL, CIC, CA, BNP...)
-      const debitStr  = iDebit>=0  ? (cols[iDebit]||'').replace(/\s/g,'')  : '';
-      const creditStr = iCredit>=0 ? (cols[iCredit]||'').replace(/\s/g,'') : '';
-      const debit  = debitStr  && debitStr!==''  ? parseMontant(debitStr)  : 0;
-      const credit = creditStr && creditStr!=='' ? parseMontant(creditStr) : 0;
+      const debitStr  = iDebit>=0  ? (cols[iDebit]||'').replace(/\s/g,'').replace(',','.')  : '';
+      const creditStr = iCredit>=0 ? (cols[iCredit]||'').replace(/\s/g,'').replace(',','.') : '';
+      const debit  = debitStr  && /\d/.test(debitStr)  ? parseMontant(cols[iDebit])  : 0;
+      const credit = creditStr && /\d/.test(creditStr) ? parseMontant(cols[iCredit]) : 0;
       if(credit > 0 && debit === 0){
         amount = credit; isDebit = false; // Entree (salaire, remboursement...)
       } else if(debit > 0 && credit === 0){
@@ -1313,8 +1313,15 @@ function parseCSV(text){
   return rows;
 }
 
+function removeAccents(str){
+  return str.normalize('NFD').replace(/[̀-ͯ]/g,'');
+}
 function findCol(headers, keywords){
-  for(const kw of keywords){ const idx=headers.findIndex(h=>h.includes(kw)); if(idx>=0) return idx; }
+  const normalized = headers.map(h=>removeAccents(h));
+  for(const kw of keywords){
+    const idx = normalized.findIndex(h=>h.includes(kw));
+    if(idx>=0) return idx;
+  }
   return -1;
 }
 
