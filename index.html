@@ -1351,35 +1351,122 @@ async function parsePDF(file){
   pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
   const buf=await file.arrayBuffer();
   const pdf=await pdfjsLib.getDocument({data:buf}).promise;
-  let allText='';
+
+  // Extraire tous les items texte avec leurs positions X,Y
+  let allItems=[];
   for(let p=1;p<=pdf.numPages;p++){
     const page=await pdf.getPage(p);
     const tc=await page.getTextContent();
-    const items=tc.items.sort((a,b)=>b.transform[5]-a.transform[5]);
-    let lastY=null, line='';
-    for(const item of items){
-      const y=Math.round(item.transform[5]);
-      if(lastY!==null && Math.abs(y-lastY)>3){ allText+=line+'\n'; line=''; }
-      line+=item.str+' '; lastY=y;
+    const vp=page.getViewport({scale:1});
+    const pageH=vp.height;
+    tc.items.forEach(item=>{
+      const x=Math.round(item.transform[4]);
+      const y=Math.round(pageH-item.transform[5]); // Inverser Y (haut=0)
+      const text=(item.str||'').trim();
+      if(text) allItems.push({text,x,y,page:p});
+    });
+  }
+
+  // Grouper par ligne (Y similaire, tolérance 4px)
+  allItems.sort((a,b)=>a.y!==b.y?a.y-b.y:a.x-b.x);
+  const lineGroups=[];
+  let curLine=null;
+  for(const item of allItems){
+    if(!curLine||Math.abs(item.y-curLine.y)>5){
+      curLine={y:item.y, items:[]};
+      lineGroups.push(curLine);
     }
-    if(line) allText+=line+'\n';
+    curLine.items.push(item);
   }
+
+  // Détecter colonnes Débit/Crédit depuis l'en-tête
+  let xDebit=-1, xCredit=-1;
+  for(const line of lineGroups){
+    const texts=line.items.map(i=>i.text.toLowerCase());
+    const iD=texts.findIndex(t=>t.includes('débit')||t.includes('debit'));
+    const iC=texts.findIndex(t=>t.includes('crédit')||t.includes('credit'));
+    if(iD>=0&&iC>=0){
+      xDebit=line.items[iD].x;
+      xCredit=line.items[iC].x;
+      break;
+    }
+  }
+  // Fallback si pas d'en-tête trouvé: estimer d'après la largeur
+  if(xDebit<0||xCredit<0){
+    const maxX=Math.max(...allItems.map(i=>i.x));
+    xDebit=maxX*0.68; xCredit=maxX*0.82;
+  }
+  const colTol=50; // Tolérance colonne en points
+
+  // Construire les transactions
+  const dateRe=/^\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4}$/;
+  const amtRe=/^-?\d{1,3}(?:[.,]\d{3})*[.,]\d{2}$/;
   const rows=[];
-  const dateRe=/\b(\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4})\b/;
-  const amtRe=/-?\d{1,3}(?:[\s.,]\d{3})*[.,]\d{2}/g;
-  for(const line of allText.split('\n')){
-    const dateMatch=line.match(dateRe);
-    const amtMatches=[...line.matchAll(amtRe)];
-    if(!dateMatch||!amtMatches.length) continue;
-    const rawAmt=amtMatches[amtMatches.length-1][0];
-    const amount=parseMontant(rawAmt);
-    if(!amount||Math.abs(amount)<0.01) continue;
-    let label=line.replace(dateRe,'').replace(amtRe,'').replace(/[^\w\s\-\/&éèêëàâùûüôîïœç]/gi,' ').replace(/\s+/g,' ').trim().slice(0,60);
-    if(label.length<2) continue;
-    const date=normalizeDate(dateMatch[0]);
-    rows.push({date, label, amount, categorie:guessCategory(label), skip:false, editLabel:label, editAmount:Math.abs(amount), isDebit:amount<0});
+  let curTx=null;
+
+  for(const line of lineGroups){
+    const firstItem=line.items[0];
+    const lineText=line.items.map(i=>i.text).join(' ');
+
+    // Nouvelle transaction si la ligne commence par une date
+    if(firstItem && dateRe.test(firstItem.text)){
+      if(curTx&&curTx.label) rows.push(curTx);
+      // Trouver débit/crédit sur cette ligne
+      let debitAmt=0, creditAmt=0;
+      for(const item of line.items){
+        const cleanAmt=item.text.replace(/\s/g,'').replace(',','.');
+        if(!amtRe.test(item.text.replace(',','.'))&&!amtRe.test(cleanAmt)) continue;
+        const val=parseMontant(item.text);
+        if(Math.abs(item.x-xDebit)<colTol) debitAmt=Math.abs(val);
+        else if(Math.abs(item.x-xCredit)<colTol) creditAmt=Math.abs(val);
+      }
+      // Label = tous les items non-date et non-montant sur cette ligne
+      const label=line.items.filter(i=>{
+        if(dateRe.test(i.text)) return false;
+        const cleanAmt=i.text.replace(/\s/g,'').replace(',','.');
+        if(amtRe.test(i.text.replace(',','.'))|| amtRe.test(cleanAmt)) return false;
+        return true;
+      }).map(i=>i.text).join(' ').trim();
+
+      const isDebit=debitAmt>0;
+      const amount=isDebit?debitAmt:creditAmt;
+      curTx={
+        date:normalizeDate(firstItem.text),
+        label, amount, isDebit,
+        debitAmt, creditAmt,
+        categorie: isDebit?guessCategory(label):guessCreditCategory(label),
+        skip:false, editLabel:label, editAmount:amount
+      };
+    } else if(curTx){
+      // Ligne de continuation du libellé
+      // Vérifier si des montants apparaissent sur cette ligne
+      let debitAmt=0, creditAmt=0;
+      for(const item of line.items){
+        const cleanAmt=item.text.replace(/\s/g,'').replace(',','.');
+        if(!amtRe.test(item.text.replace(',','.'))&&!amtRe.test(cleanAmt)) continue;
+        const val=parseMontant(item.text);
+        if(Math.abs(item.x-xDebit)<colTol) debitAmt=Math.abs(val);
+        else if(Math.abs(item.x-xCredit)<colTol) creditAmt=Math.abs(val);
+      }
+      if(debitAmt>0||creditAmt>0){
+        // Montants trouvés sur une ligne de continuation
+        if(!curTx.amount){
+          curTx.isDebit=debitAmt>0;
+          curTx.amount=debitAmt||creditAmt;
+          curTx.editAmount=curTx.amount;
+          curTx.categorie=curTx.isDebit?guessCategory(curTx.label):guessCreditCategory(curTx.label);
+        }
+      } else {
+        // Ajouter au libellé si c'est du texte pertinent
+        const addText=line.items.filter(i=>!/^(REF|RUM|SDD|IBAN|BIC|ref|n°)/i.test(i.text)).map(i=>i.text).join(' ').trim();
+        if(addText && curTx.label.length<60) curTx.label=(curTx.label+' '+addText).trim().slice(0,60);
+      }
+    }
   }
-  return rows;
+  if(curTx&&curTx.label&&curTx.amount) rows.push(curTx);
+
+  // Filtrer les lignes sans montant et les entrées parasites
+  return rows.filter(r=>r.amount>0&&r.label.length>1&&!r.label.match(/^(SOLDE|TAEG|TVA|Montant|Date|Page)/i));
 }
 
 function guessCategory(label){
